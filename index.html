@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gabarita - Correção de avaliações</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div class="app-container">
+        <header class="cabecalho">
+            <div>
+                <span class="logo">Gabarita</span>
+                <h1 id="titulo-exame-header" class="titulo-app">Nova avaliação</h1>
+            </div>
+            <span id="badge-status-mestre" class="badge pendente">Gabarito pendente</span>
+        </header>
+
+        <nav class="abas-nav" role="tablist" aria-label="Etapas da correção">
+            <button type="button" class="aba-btn ativa" role="tab" id="aba-mestre" aria-selected="true" aria-controls="secao-mestre" data-alvo="secao-mestre">1. Configurar</button>
+            <button type="button" class="aba-btn" role="tab" id="aba-corrigir" aria-selected="false" aria-controls="secao-corrigir" data-alvo="secao-corrigir">2. Corrigir</button>
+            <button type="button" class="aba-btn" role="tab" id="aba-resultados" aria-selected="false" aria-controls="secao-resultados" data-alvo="secao-resultados">3. Turma (<span id="contador-alunos">0</span>)</button>
+        </nav>
+
+        <!-- ETAPA 1: CONFIGURAR -->
+        <main id="secao-mestre" class="secao ativa" role="tabpanel" aria-labelledby="aba-mestre">
+            <div class="card-info">
+                <h2>Avaliação</h2>
+                <div class="linha-config">
+                    <div class="grupo-input flex-maior">
+                        <label for="select-avaliacao">Avaliação em uso</label>
+                        <select id="select-avaliacao"></select>
+                    </div>
+                </div>
+                <div class="linha-botoes">
+                    <button type="button" id="btn-nova-avaliacao" class="btn-secundario btn-compacto">+ Nova avaliação</button>
+                    <button type="button" id="btn-excluir-avaliacao" class="btn-link btn-link-perigo">Excluir esta avaliação</button>
+                </div>
+
+                <div class="linha-config espaco-topo">
+                    <div class="grupo-input flex-maior">
+                        <label for="input-titulo-prova">Nome</label>
+                        <input type="text" id="input-titulo-prova" maxlength="50">
+                    </div>
+                    <div class="grupo-input flex-menor">
+                        <label for="input-qtd-questoes">Nº questões</label>
+                        <input type="number" id="input-qtd-questoes" min="1" max="60" value="10" inputmode="numeric">
+                    </div>
+                </div>
+                <div class="barra-info-peso">
+                    <span id="info-regra-contagem"></span>
+                    <button type="button" id="btn-aplicar-qtd" class="btn-pequeno">Aplicar</button>
+                </div>
+            </div>
+
+            <div class="card-info">
+                <h2>Áreas</h2>
+                <p>Se a avaliação reúne várias matérias, divida as questões por área. O resultado de cada aluno e da turma é calculado por área.</p>
+                <div id="lista-areas" class="lista-areas"></div>
+                <p id="erro-areas" class="mensagem-erro oculto" role="alert"></p>
+                <div class="linha-botoes">
+                    <button type="button" id="btn-add-area" class="btn-secundario btn-compacto">+ Área</button>
+                    <button type="button" id="btn-modelo-goias" class="btn-secundario btn-compacto">Modelo Biologia/Física/Química (40)</button>
+                </div>
+                <button type="button" id="btn-salvar-areas" class="btn-primario espaco-topo">Salvar áreas</button>
+            </div>
+
+            <div class="card-info">
+                <div class="topo-card-flex">
+                    <div>
+                        <h2>Gabarito oficial</h2>
+                        <p id="progresso-preenchimento">0 de 10 questões preenchidas</p>
+                    </div>
+                </div>
+                <div id="grade-mestre" class="grade-questoes"></div>
+                <button type="button" id="btn-salvar-mestre" class="btn-primario">Conferir gabarito</button>
+            </div>
+        </main>
+
+        <!-- ETAPA 2: CORRIGIR -->
+        <section id="secao-corrigir" class="secao" role="tabpanel" aria-labelledby="aba-corrigir">
+            <div class="card-info">
+                <div class="topo-card-flex">
+                    <h2>Aluno</h2>
+                    <span id="progresso-correcao" class="texto-suave"></span>
+                </div>
+                <div class="grupo-input">
+                    <label for="select-aluno">Aluno a corrigir</label>
+                    <select id="select-aluno"></select>
+                </div>
+                <div class="linha-config espaco-topo">
+                    <div class="grupo-input flex-maior">
+                        <label for="input-novo-aluno">Aluno não está na lista?</label>
+                        <input type="text" id="input-novo-aluno" placeholder="Nome ou código" maxlength="60" autocomplete="off">
+                    </div>
+                    <button type="button" id="btn-add-aluno-rapido" class="btn-secundario btn-compacto alinhar-base">Adicionar</button>
+                </div>
+            </div>
+
+            <div class="card-info">
+                <h2>Cartão-resposta</h2>
+                <p id="dica-foto">Fotografe o cartão inteiro, de cima, com as duas tabelas visíveis e boa luz.</p>
+                <div class="linha-botoes">
+                    <label for="input-foto" id="btn-foto" class="btn-primario btn-rotulo" tabindex="0" role="button">📷 Fotografar cartão</label>
+                    <input type="file" id="input-foto" accept="image/*" capture="environment" class="oculto-visual">
+                    <button type="button" id="btn-manual" class="btn-secundario">Marcar à mão</button>
+                </div>
+                <p id="aviso-leitura" class="aviso-leitura oculto" role="status"></p>
+                <button type="button" id="btn-cantos-manual" class="btn-link oculto">Marcar os cantos da tabela manualmente</button>
+
+                <div id="painel-cantos" class="painel-cantos oculto">
+                    <p id="texto-cantos"></p>
+                    <canvas id="canvas-cantos" aria-label="Foto do cartão para marcar os cantos"></canvas>
+                    <div class="linha-botoes">
+                        <button type="button" id="btn-refazer-cantos" class="btn-secundario btn-compacto">Refazer cantos</button>
+                        <button type="button" id="btn-fechar-cantos" class="btn-link">Cancelar</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="painel-conferencia" class="card-resultado oculto">
+                <div class="cabecalho-nota">
+                    <div>
+                        <span class="rotulo-pequeno">ALUNO(A)</span>
+                        <h3 id="res-nome-aluno">-</h3>
+                    </div>
+                    <div class="placar-nota">
+                        <span class="rotulo-pequeno">ACERTOS</span>
+                        <strong id="res-acertos-valor">0 / 10</strong>
+                    </div>
+                </div>
+
+                <div class="placar-detalhado">
+                    <span class="pill acerto" id="pill-acertos">0 acertos</span>
+                    <span class="pill erro" id="pill-erros">0 erros</span>
+                    <span class="pill branco" id="pill-brancos">0 em branco</span>
+                    <span class="pill rasura" id="pill-rasuras">0 rasuras</span>
+                </div>
+                <ul id="lista-res-areas" class="lista-res-areas"></ul>
+
+                <p id="contador-revisar" class="aviso-revisar oculto" role="status"></p>
+                <p class="instrucao-ajuste">
+                    Toque na letra marcada pelo aluno; toque de novo para deixar em branco.
+                    Use <strong>[!]</strong> para rasura ou dupla marcação (a questão não pontua).
+                </p>
+
+                <details id="detalhe-leitura" class="detalhe oculto">
+                    <summary>Ver a leitura sobre a foto</summary>
+                    <p class="texto-suave">Verde: lida com segurança. Laranja: tinta parcial, confira. Vermelho: em branco ou dupla marcação.</p>
+                    <div class="par-canvas">
+                        <canvas id="canvas-tab-0"></canvas>
+                        <canvas id="canvas-tab-1"></canvas>
+                    </div>
+                </details>
+
+                <div id="grade-aluno" class="grade-questoes"></div>
+                <div id="log-divergencias" class="caixa-divergencias"></div>
+
+                <button type="button" id="btn-confirmar-nota" class="btn-sucesso">✓ Salvar e próximo aluno</button>
+                <button type="button" id="btn-cancelar-correcao" class="btn-secundario espaco-topo">Descartar esta correção</button>
+            </div>
+        </section>
+
+        <!-- ETAPA 3: TURMA -->
+        <section id="secao-resultados" class="secao" role="tabpanel" aria-labelledby="aba-resultados">
+            <div class="cards-metricas">
+                <div class="metrica"><strong id="metrica-corrigidos">0</strong><span>Corrigidos</span></div>
+                <div class="metrica"><strong id="metrica-media">0,0</strong><span>Média de acertos</span></div>
+                <div class="metrica"><strong id="metrica-questoes">10</strong><span>Questões</span></div>
+            </div>
+
+            <div class="card-lista" id="card-stats-areas">
+                <div class="topo-lista"><h2>Desempenho por área</h2></div>
+                <ul id="lista-stats-areas" class="lista-stats"></ul>
+            </div>
+
+            <div class="card-lista">
+                <div class="topo-lista"><h2>Alunos</h2></div>
+                <div class="grupo-input">
+                    <label for="textarea-alunos">Adicionar alunos (um nome por linha)</label>
+                    <textarea id="textarea-alunos" rows="3" placeholder="01 - Ana Souza&#10;02 - Bruno Lima"></textarea>
+                </div>
+                <button type="button" id="btn-add-alunos" class="btn-secundario espaco-topo">Adicionar à lista</button>
+                <ul id="lista-alunos-salvos" class="lista-notas espaco-topo"></ul>
+            </div>
+
+            <details class="card-lista detalhe-card">
+                <summary>Acerto por questão</summary>
+                <ul id="lista-stats-questoes" class="lista-stats"></ul>
+            </details>
+
+            <div class="card-lista">
+                <div class="topo-lista"><h2>Dados</h2></div>
+                <div class="linha-botoes coluna">
+                    <button type="button" id="btn-exportar-csv" class="btn-secundario">📥 Exportar resultados (CSV)</button>
+                    <button type="button" id="btn-exportar-backup" class="btn-secundario">💾 Salvar backup completo</button>
+                    <label for="input-importar-backup" class="btn-secundario btn-rotulo" tabindex="0" role="button" id="btn-importar-backup">📂 Restaurar backup</label>
+                    <input type="file" id="input-importar-backup" accept="application/json,.json" class="oculto-visual">
+                </div>
+                <p class="texto-suave espaco-topo">Os dados ficam só neste aparelho. Salve um backup de vez em quando, principalmente antes de limpar o navegador.</p>
+            </div>
+
+            <button type="button" id="btn-limpar-dados" class="btn-perigo">Apagar todos os dados deste aparelho</button>
+        </section>
+    </div>
+
+    <div id="toast" class="toast oculto" role="status" aria-live="polite"></div>
+
+    <script src="dominio.js"></script>
+    <script src="leitor.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

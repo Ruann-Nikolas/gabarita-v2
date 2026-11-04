@@ -1,0 +1,8 @@
+{
+  "_nota": "'.' = em branco, '*' = dupla marcação. 'conferencia' diz como cada resultado foi verificado por olho.",
+  "foto1.jpg": { "leitura": "ABBACDEACDCAEECBBDDAEEDCD*EDBBCADDC*EEAA", "revisar": [2, 26, 36], "conferencia": "inteira, sobre a imagem corrigida (Q01 caneta preta; Q26 e Q36 duplas)" },
+  "foto2.jpg": { "leitura": "BCEEABBDCDDDCBEACDDAAABCCEDCAABDCADCEEAA", "revisar": [], "conferencia": "as 40 respostas conferidas a olho" },
+  "foto3.jpg": { "leitura": "EBBAEDCEACCAEBBECBEBAEBDCEACBDACBECBCBCE", "revisar": [], "conferencia": "só trechos; coincide com o protótipo independente em Python" },
+  "foto4.jpg": { "leitura": "ECACBECECABBCECABACEEABCDEAECDBEBCDDBCBE", "revisar": [], "conferencia": "só trechos; coincide com o protótipo independente em Python" },
+  "foto5.jpg": { "leitura": "AEACBDEBBCADAEBDBCBCD.ABDEBADEBCBADDEDCB", "revisar": [22, 34], "conferencia": "inteira, sobre a imagem corrigida (Q22 mancha fora da bolha = branco sinalizado; Q34 tinta deslocada)" }
+}
