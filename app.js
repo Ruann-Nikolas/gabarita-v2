@@ -14,6 +14,9 @@
     let areasEditando = [];   // linhas do editor de áreas (texto digitado)
     let leitura = null;       // { img, ok, respostas, revisar, fracoes, quads, origem, revisados:Set }
     let cantos = [];          // toques do usuário ao marcar cantos manualmente
+    let gabCam = null;        // leitura do cartão mestre em conferência: { img, r, respostas, revisar, revisados:Set }
+    let modoGabarito = 'manual';
+    let alunoEditando = null; // id do aluno cuja linha está em edição na aba Turma
 
     // ------------------------------------------------------------------
     // Utilidades de interface
@@ -55,13 +58,16 @@
             b.setAttribute('aria-selected', String(ativa));
         });
         document.querySelectorAll('.secao').forEach(s => s.classList.toggle('ativa', s.id === idSecao));
-        if (idSecao === 'secao-resultados') renderTurma(); // notas dependem do gabarito atual
+        if (idSecao === 'secao-resultados') renderResultados(); // notas dependem do gabarito atual
+        if (idSecao === 'secao-turma') renderTurma();
         if (idSecao === 'secao-corrigir') renderCorrigir();
     }
 
+    const rotuloAluno = (a) => `${String(a.numero).padStart(2, '0')} – ${a.nome}`;
+
     function nomeDoAluno(id) {
         const a = app.avaliacao.alunos.find(x => x.id === id);
-        return a ? a.nome : '-';
+        return a ? rotuloAluno(a) : '-';
     }
 
     // ------------------------------------------------------------------
@@ -69,7 +75,17 @@
     // ------------------------------------------------------------------
     function renderCabecalho() {
         const av = app.avaliacao;
-        el('titulo-exame-header').textContent = av.titulo;
+        const ctx = app.contexto;
+        const h = el('titulo-exame-header');
+        h.textContent = '';
+        [['Matéria', ctx.materia.nome], ['Turma', ctx.turma.nome], ['Avaliação', ctx.avaliacao.titulo]].forEach(([rotulo, valor]) => {
+            const item = document.createElement('span');
+            item.className = 'ctx-item';
+            const r = document.createElement('small'); r.textContent = rotulo;
+            const v = document.createElement('span'); v.textContent = valor;
+            item.append(r, v);
+            h.appendChild(item);
+        });
         el('input-titulo-prova').value = av.titulo;
         el('input-qtd-questoes').value = av.totalQuestoes;
         el('info-regra-contagem').textContent = `${av.totalQuestoes} questões, 1 acerto por questão (sem peso)`;
@@ -83,16 +99,27 @@
         }
     }
 
-    function renderAvaliacoes() {
-        const sel = el('select-avaliacao');
+    function preencherSelect(id, itens, rotulo, atual) {
+        const sel = el(id);
         sel.textContent = '';
-        app.avaliacoes.forEach(a => {
+        itens.forEach(x => {
             const o = document.createElement('option');
-            o.value = String(a.id);
-            o.textContent = a.titulo;
+            o.value = String(x.id);
+            o.textContent = rotulo(x);
             sel.appendChild(o);
         });
-        sel.value = String(app.atualId);
+        sel.value = String(atual);
+    }
+
+    function renderAvaliacoes() {
+        preencherSelect('select-materia', app.materias, m => m.nome, app.materiaId);
+        preencherSelect('select-turma', app.turmas, t => t.nome, app.turmaId);
+        preencherSelect('select-avaliacao', app.avaliacoes, a => a.titulo, app.atualId);
+        el('btn-ir-corrigir').classList.toggle('btn-primario', app.gabaritoEstaCompleto);
+        el('btn-ir-corrigir').classList.toggle('btn-secundario', !app.gabaritoEstaCompleto);
+        el('info-proximo').textContent = app.gabaritoEstaCompleto
+            ? 'Gabarito pronto. Cadastre os alunos na Turma ou comece a corrigir.'
+            : 'Termine o gabarito acima para liberar a correção. A Turma (alunos) já pode ser preenchida.';
     }
 
     function carregarAreasEditando() {
@@ -189,6 +216,54 @@
     }
 
     function ligarConfigurar() {
+        el('select-materia').addEventListener('change', (e) => { app.selecionarMateria(Number(e.target.value)); trocouAvaliacao(); });
+        el('select-turma').addEventListener('change', (e) => { app.selecionarTurma(Number(e.target.value)); trocouAvaliacao(); });
+
+        el('btn-nova-materia').addEventListener('click', () => {
+            const nome = limparTexto(prompt('Nome da nova matéria:') || '', 50);
+            if (!nome) return;
+            app.criarMateria(nome);
+            trocouAvaliacao();
+            avisar(`Matéria "${nome}" criada, com a Turma 1. Renomeie a turma e configure a avaliação.`, 'sucesso', 4500);
+        });
+        el('btn-renomear-materia').addEventListener('click', () => {
+            const nome = limparTexto(prompt('Novo nome da matéria:', app.contexto.materia.nome) || '', 50);
+            if (!nome) return;
+            app.renomearMateria(nome);
+            renderTudo();
+        });
+        el('btn-excluir-materia').addEventListener('click', () => {
+            const m = app.contexto.materia;
+            if (!confirm(`Excluir a matéria "${m.nome}" com TODAS as turmas, alunos, avaliações e correções dela? Não dá para desfazer.`)) return;
+            app.excluirMateria(m.id);
+            trocouAvaliacao();
+            avisar('Matéria excluída.', 'sucesso');
+        });
+
+        el('btn-nova-turma').addEventListener('click', () => {
+            const nome = limparTexto(prompt('Nome da nova turma (ex.: 3º B Matutino):') || '', 50);
+            if (!nome) return;
+            app.criarTurma(nome);
+            trocouAvaliacao();
+            avisar(`Turma "${nome}" criada. Configure a avaliação e cadastre os alunos.`, 'sucesso', 4500);
+        });
+        el('btn-renomear-turma').addEventListener('click', () => {
+            const nome = limparTexto(prompt('Novo nome da turma:', app.contexto.turma.nome) || '', 50);
+            if (!nome) return;
+            app.renomearTurma(nome);
+            renderTudo();
+        });
+        el('btn-excluir-turma').addEventListener('click', () => {
+            const t = app.contexto.turma;
+            if (!confirm(`Excluir a turma "${t.nome}" com TODOS os alunos, avaliações e correções? Não dá para desfazer.`)) return;
+            app.excluirTurma(t.id);
+            trocouAvaliacao();
+            avisar('Turma excluída.', 'sucesso');
+        });
+
+        el('btn-ir-turma').addEventListener('click', () => mostrarAba('secao-turma'));
+        el('btn-ir-corrigir').addEventListener('click', irParaCorrigir);
+
         el('select-avaliacao').addEventListener('change', (e) => {
             app.selecionarAvaliacao(Number(e.target.value));
             trocouAvaliacao();
@@ -205,7 +280,7 @@
         el('btn-excluir-avaliacao').addEventListener('click', () => {
             const av = app.avaliacao;
             const n = Object.keys(av.correcoes).length;
-            if (!confirm(`Excluir a avaliação "${av.titulo}"? Isso apaga o gabarito, ${plural(av.alunos.length, 'aluno', 'alunos')} e ${plural(n, 'correção', 'correções')}. Não dá para desfazer.`)) return;
+            if (!confirm(`Excluir a avaliação "${av.titulo}"? Isso apaga o gabarito e ${plural(n, 'correção', 'correções')} dela (os alunos continuam na turma). Não dá para desfazer.`)) return;
             app.excluirAvaliacao(av.id);
             trocouAvaliacao();
             avisar('Avaliação excluída.', 'sucesso');
@@ -297,9 +372,156 @@
         });
     }
 
+    function irParaCorrigir() {
+        if (!app.gabaritoEstaCompleto) {
+            avisar(`Preencha todas as ${app.avaliacao.totalQuestoes} questões do gabarito antes de corrigir alunos.`, 'erro', 4500);
+            return;
+        }
+        mostrarAba('secao-corrigir');
+    }
+
+    // ---- gabarito pela câmera (reaproveita Leitor, carregarImagem e o desenho da leitura) ----
+    function definirModoGabarito(modo) {
+        modoGabarito = modo;
+        el('gab-manual').classList.toggle('oculto', modo !== 'manual');
+        el('gab-camera').classList.toggle('oculto', modo !== 'camera');
+        [['btn-modo-manual', 'manual'], ['btn-modo-camera', 'camera']].forEach(([id, m]) => {
+            el(id).classList.toggle('ativo', m === modo);
+            el(id).setAttribute('aria-pressed', String(m === modo));
+        });
+        if (modo === 'camera') renderGabaritoCamera();
+    }
+
+    function mostrarAvisoGab(texto, tipo = 'info') {
+        const p = el('aviso-gab-camera');
+        p.textContent = texto || '';
+        p.className = `aviso-leitura ${tipo}` + (texto ? '' : ' oculto');
+    }
+
+    // Questões que exigem atenção: sem alternativa definida, ou lidas com dúvida e ainda não tocadas
+    function destaquesGab() {
+        const g = gabCam;
+        if (!g) return [];
+        return g.respostas.map((r, i) => (!OPCOES_VALIDAS.includes(r) || (g.revisar[i] && !g.revisados.has(i)) ? i : -1)).filter(i => i >= 0);
+    }
+
+    function renderGabaritoCamera() {
+        const disponivel = leituraDisponivel();
+        el('input-foto-gabarito').disabled = !disponivel;
+        el('btn-foto-gabarito').classList.toggle('desativado', !disponivel);
+        el('btn-foto-gabarito').setAttribute('aria-disabled', String(!disponivel));
+        el('dica-gab-camera').textContent = disponivel
+            ? 'Fotografe o cartão-resposta mestre (o preenchido com o gabarito oficial), de cima, com as duas tabelas visíveis e boa luz. Você confere tudo antes de salvar.'
+            : `A leitura por câmera existe só para o cartão de ${MODELO.questoes} questões (modelo Goiás). Esta avaliação tem ${app.avaliacao.totalQuestoes}: use o cadastro manual.`;
+
+        const painel = el('painel-gab-camera');
+        if (!gabCam) { painel.classList.add('oculto'); return; }
+        painel.classList.remove('oculto');
+        const g = gabCam;
+        const total = g.respostas.length;
+        const semLetra = g.respostas.filter(r => !OPCOES_VALIDAS.includes(r));
+        const brancas = semLetra.filter(r => r === null).length;
+        const duplas = semLetra.length - brancas;
+        const destaque = new Set(destaquesGab());
+        const partes = [`${total - semLetra.length} de ${total} questões com alternativa definida.`];
+        if (brancas) partes.push(`${plural(brancas, 'em branco', 'em branco')}.`);
+        if (duplas) partes.push(`${plural(duplas, 'com dupla marcação/rasura', 'com dupla marcação/rasura')}.`);
+        const duvidosas = [...destaque].filter(i => OPCOES_VALIDAS.includes(g.respostas[i])).length;
+        if (duvidosas) partes.push(`${plural(duvidosas, 'lida com dúvida', 'lidas com dúvida')} (toque na letra para confirmar).`);
+        el('resumo-gab-camera').textContent = partes.join(' ');
+        el('resumo-gab-camera').classList.toggle('oculto', false);
+
+        const grade = el('grade-gab-camera');
+        const rolagem = grade.scrollTop;
+        grade.textContent = '';
+        for (let i = 0; i < total; i++) {
+            grade.appendChild(criarLinhaQuestao(i, OPCOES_VALIDAS, (letra) => {
+                g.respostas[i] = letra;
+                g.revisados.add(i);
+                renderGabaritoCamera();
+            }, (letra) => (g.respostas[i] === letra ? 'selecionada' : ''), destaque.has(i)));
+        }
+        grade.scrollTop = rolagem;
+        el('btn-confirmar-gabarito').disabled = semLetra.length > 0;
+    }
+
+    async function aoEscolherFotoGabarito(e) {
+        const arquivo = e.target.files && e.target.files[0];
+        e.target.value = '';
+        if (!arquivo) return;
+        if (gabCam && !confirm('Já há uma leitura em conferência. Substituir pela nova foto?')) return;
+        mostrarAvisoGab('Lendo o cartão…');
+        try {
+            const img = await carregarImagem(arquivo);
+            await new Promise(r => setTimeout(r, 30));
+            const r = Leitor.lerCartao(img, MODELO);
+            if (!r.ok) {
+                gabCam = null;
+                renderGabaritoCamera();
+                mostrarAvisoGab(`${r.motivo} Fotografe de novo, de cima e com o cartão inteiro na imagem.`, 'erro');
+                return;
+            }
+            if (r.suspeita) r.revisar.fill(true);
+            gabCam = { img, ...r, respostas: [...r.respostas], revisados: new Set() };
+            mostrarAvisoGab(r.suspeita || r.aproximada
+                ? 'Atenção: a leitura pode estar desalinhada com o cartão. Confira todas as questões ou refaça a foto (de cima, cartão inteiro, boa luz).'
+                : 'Cartão lido. Confira as respostas abaixo antes de salvar.', r.suspeita || r.aproximada ? 'erro' : 'ok');
+            renderGabaritoCamera();
+            desenharLeituraSobreFoto(gabCam, 'canvas-gab-');
+            el('painel-gab-camera').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } catch (erro) {
+            console.error(erro);
+            gabCam = null;
+            renderGabaritoCamera();
+            mostrarAvisoGab('Não consegui abrir essa foto. Tente tirar outra.', 'erro');
+        }
+    }
+
+    function ligarGabaritoCamera() {
+        el('btn-modo-manual').addEventListener('click', () => definirModoGabarito('manual'));
+        el('btn-modo-camera').addEventListener('click', () => definirModoGabarito('camera'));
+        el('btn-foto-gabarito').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el('btn-foto-gabarito').click(); }
+        });
+        el('btn-foto-gabarito').addEventListener('click', (e) => { if (el('input-foto-gabarito').disabled) e.preventDefault(); });
+        el('input-foto-gabarito').addEventListener('change', aoEscolherFotoGabarito);
+
+        el('btn-descartar-gabarito').addEventListener('click', () => {
+            if (!confirm('Descartar a leitura e as correções feitas nela?')) return;
+            gabCam = null;
+            mostrarAvisoGab('');
+            renderGabaritoCamera();
+        });
+
+        el('btn-confirmar-gabarito').addEventListener('click', () => {
+            const g = gabCam;
+            if (!g) return;
+            const av = app.avaliacao;
+            const pend = destaquesGab();
+            const substitui = app.gabaritoEstaCompleto && av.gabarito.some((x, i) => x !== g.respostas[i]);
+            const aviso = [];
+            if (pend.length) aviso.push(`${plural(pend.length, 'questão em destaque ainda não foi conferida', 'questões em destaque ainda não foram conferidas')}.`);
+            aviso.push(substitui
+                ? `Salvar substitui o gabarito atual de "${av.titulo}" e recalcula as notas já corrigidas.`
+                : `Salvar este gabarito de ${g.respostas.length} questões em "${av.titulo}"?`);
+            if (!confirm(aviso.join(' ') + ' Confirmar?')) return;
+            try {
+                app.definirGabarito(g.respostas);
+            } catch (erro) { avisar(erro.message, 'erro', 4500); return; }
+            gabCam = null;
+            mostrarAvisoGab('');
+            descartarCorrecaoEmAndamento();
+            definirModoGabarito('manual');
+            renderTudo();
+            avisar('Gabarito salvo a partir da foto. Confira no cadastro manual, se quiser.', 'sucesso', 4500);
+        });
+    }
+
     function trocouAvaliacao() {
         alunoSelecionado = null;
         leitura = null;
+        gabCam = null;
+        alunoEditando = null;
         fecharPainelCantos();
         carregarAreasEditando();
         mostrarErroAreas('');
@@ -333,11 +555,16 @@
         av.alunos.forEach(a => {
             const o = document.createElement('option');
             o.value = String(a.id);
-            o.textContent = (app.foiCorrigido(a.id) ? '✓ ' : '') + a.nome;
+            o.textContent = (app.foiCorrigido(a.id) ? '✓ ' : '') + rotuloAluno(a);
             sel.appendChild(o);
         });
         if (alunoSelecionado !== null) sel.value = String(alunoSelecionado);
         sel.disabled = av.alunos.length === 0;
+
+        const sel0 = av.alunos.find(a => a.id === alunoSelecionado);
+        el('aluno-selecionado-info').textContent = sel0
+            ? `Corrigindo: ${rotuloAluno(sel0)}${app.foiCorrigido(sel0.id) ? ' (já corrigido — vai substituir)' : ''}`
+            : 'Nenhum aluno selecionado. Digite o nome ou o nº de chamada acima.';
 
         const corrigidos = Object.keys(av.correcoes).length;
         el('progresso-correcao').textContent = av.alunos.length ? `${corrigidos} de ${av.alunos.length} corrigidos` : '';
@@ -363,15 +590,53 @@
         fecharPainelCantos();
     }
 
+    // Troca o aluno em correção (pede confirmação se há marcações em andamento). true se trocou.
+    function escolherAluno(id) {
+        if (id === alunoSelecionado) return true;
+        if (app.rascunhoTemMarcacoes && !confirm('Há uma correção em andamento. Descartar e trocar de aluno?')) return false;
+        descartarCorrecaoEmAndamento();
+        alunoSelecionado = id;
+        renderCorrigir();
+        return true;
+    }
+
+    function renderBuscaAluno() {
+        const ul = el('lista-busca-aluno');
+        ul.textContent = '';
+        const achados = app.buscarAluno(el('input-busca-aluno').value);
+        ul.classList.toggle('oculto', el('input-busca-aluno').value.trim() === '');
+        if (el('input-busca-aluno').value.trim() !== '' && achados.length === 0) {
+            const li = document.createElement('li');
+            li.className = 'lista-vazia';
+            li.textContent = 'Ninguém com esse nome ou número nesta turma.';
+            ul.appendChild(li);
+            return achados;
+        }
+        achados.slice(0, 6).forEach(a => {
+            const li = document.createElement('li');
+            const b = document.createElement('button');
+            b.type = 'button'; b.className = 'item-busca';
+            b.textContent = (app.foiCorrigido(a.id) ? '✓ ' : '') + rotuloAluno(a);
+            b.addEventListener('click', () => {
+                if (escolherAluno(a.id)) { el('input-busca-aluno').value = ''; renderBuscaAluno(); }
+            });
+            li.appendChild(b);
+            ul.appendChild(li);
+        });
+        return achados;
+    }
+
     function ligarCorrigir() {
         el('select-aluno').addEventListener('change', (e) => {
-            if (app.rascunhoTemMarcacoes && !confirm('Há uma correção em andamento. Descartar e trocar de aluno?')) {
-                e.target.value = String(alunoSelecionado);
-                return;
-            }
-            descartarCorrecaoEmAndamento();
-            alunoSelecionado = Number(e.target.value);
-            renderCorrigir();
+            if (!escolherAluno(Number(e.target.value))) e.target.value = String(alunoSelecionado);
+        });
+        el('input-busca-aluno').addEventListener('input', renderBuscaAluno);
+        el('input-busca-aluno').addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            const achados = renderBuscaAluno();
+            if (achados.length === 1 && escolherAluno(achados[0].id)) { el('input-busca-aluno').value = ''; renderBuscaAluno(); }
+            else if (achados.length > 1) avisar('Mais de um aluno encontrado: toque no certo.', 'info');
         });
 
         el('btn-add-aluno-rapido').addEventListener('click', () => {
@@ -379,13 +644,16 @@
             const nome = limparTexto(campo.value);
             if (!nome) { avisar('Digite o nome ou código do aluno.', 'erro'); campo.focus(); return; }
             const r = app.adicionarAlunos(nome);
-            const existente = app.avaliacao.alunos.find(a => a.nome.toLowerCase() === nome.toLowerCase());
+            const pedido = nome.replace(/^\d{1,3}\s*[-–.):]\s*/, '').toLowerCase();
+            const existente = app.avaliacao.alunos.find(a => a.nome.toLowerCase() === pedido);
+            if (!existente) { avisar('Não foi possível adicionar: o nº de chamada já existe nesta turma.', 'erro', 4500); return; }
             if (r.ignorados) avisar(`"${nome}" já está na lista. Selecionado.`, 'info');
             descartarCorrecaoEmAndamento();
             alunoSelecionado = existente.id;
             campo.value = '';
             renderCorrigir();
             renderTurma();
+            renderResultados();
         });
         el('input-novo-aluno').addEventListener('keydown', (e) => { if (e.key === 'Enter') el('btn-add-aluno-rapido').click(); });
 
@@ -430,7 +698,7 @@
             const proximo = app.proximoAlunoPendente(r.alunoId);
             alunoSelecionado = proximo ?? r.alunoId;
             renderCorrigir();
-            renderTurma();
+            renderResultados();
             window.scrollTo({ top: 0, behavior: 'smooth' });
             avisar(proximo === null
                 ? `Salvo: ${nome} — ${r.acertos}/${r.total} acertos. Todos os alunos da lista foram corrigidos.`
@@ -620,22 +888,24 @@
         if (comFoto && redesenharFoto) desenharLeituraSobreFoto();
     }
 
-    function desenharLeituraSobreFoto() {
+    // Desenha a leitura (círculos verdes/laranja/vermelhos) sobre as duas tabelas corrigidas.
+    // `leit` = resultado de Leitor.lerCartao + img; `prefixo` = prefixo dos ids dos canvas.
+    function desenharLeituraSobreFoto(leit = leitura, prefixo = 'canvas-tab-') {
         for (let t = 0; t < 2; t++) {
-            const n = Leitor.normalizarTabela(leitura.img, leitura.quads[t], MODELO);
-            const cv = el(`canvas-tab-${t}`);
+            const n = Leitor.normalizarTabela(leit.img, leit.quads[t], MODELO);
+            const cv = el(`${prefixo}${t}`);
             cv.width = n.width; cv.height = n.height;
             const ctx = cv.getContext('2d');
             ctx.putImageData(new ImageData(n.data, n.width, n.height), 0, 0);
             ctx.lineWidth = 5;
             for (let i = 0; i < MODELO.linhas; i++) {
                 const q = t * MODELO.linhas + i;
-                const resp = leitura.respostas[q];
+                const resp = leit.respostas[q];
                 if (resp && resp !== CODIGO_RASURA) {
                     const c = Leitor.centroBolha(MODELO, t, i, MODELO.opcoes.indexOf(resp));
-                    ctx.strokeStyle = leitura.revisar[q] ? '#ff9800' : '#00c853';
+                    ctx.strokeStyle = leit.revisar[q] ? '#ff9800' : '#00c853';
                     ctx.beginPath(); ctx.arc(c.x, c.y, c.r + 4, 0, Math.PI * 2); ctx.stroke();
-                } else if (resp === CODIGO_RASURA || leitura.revisar[q]) {
+                } else if (resp === CODIGO_RASURA || leit.revisar[q] || resp === null) {
                     const c = Leitor.centroBolha(MODELO, t, i, 2);
                     ctx.strokeStyle = '#ff1744';
                     ctx.strokeRect(c.x - 110, c.y - 18, 220, 36);
@@ -663,10 +933,9 @@
         return li;
     }
 
-    function renderTurma() {
+    function renderResultados() {
         const av = app.avaliacao;
         const est = app.estatisticas();
-        el('contador-alunos').textContent = av.alunos.length;
         el('metrica-corrigidos').textContent = `${est.corrigidos}/${est.totalAlunos}`;
         el('metrica-questoes').textContent = av.totalQuestoes;
         el('metrica-media').textContent = est.corrigidos ? fmt1(est.mediaAcertos) : '0,0';
@@ -697,12 +966,12 @@
                 `${q.percentualAcerto}%`, q.percentualAcerto)));
         }
 
-        const ul = el('lista-alunos-salvos');
+        const ul = el('lista-resultados');
         ul.textContent = '';
         if (av.alunos.length === 0) {
             const vazio = document.createElement('li');
             vazio.className = 'lista-vazia';
-            vazio.textContent = 'Nenhum aluno na lista. Adicione acima, um nome por linha.';
+            vazio.textContent = 'Nenhum aluno na turma. Cadastre na aba Turma.';
             ul.appendChild(vazio);
             return;
         }
@@ -712,7 +981,7 @@
             li.className = 'item-nota';
 
             const info = document.createElement('div');
-            const nome = document.createElement('strong'); nome.textContent = aluno.nome;
+            const nome = document.createElement('strong'); nome.textContent = rotuloAluno(aluno);
             const resumo = document.createElement('small');
             if (!r) {
                 resumo.textContent = 'Ainda não corrigido';
@@ -747,19 +1016,80 @@
                 mostrarAba('secao-corrigir');
             });
 
+            acoes.append(badge, corrigir);
+            li.append(info, acoes);
+            ul.appendChild(li);
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // Aba 2 — Turma (alunos: adicionar, editar, remover)
+    // ------------------------------------------------------------------
+    function renderTurma() {
+        const av = app.avaliacao;
+        el('contador-alunos').textContent = av.alunos.length;
+        const ul = el('lista-alunos-salvos');
+        ul.textContent = '';
+        if (av.alunos.length === 0) {
+            const vazio = document.createElement('li');
+            vazio.className = 'lista-vazia';
+            vazio.textContent = 'Nenhum aluno na turma. Adicione acima, um por linha.';
+            ul.appendChild(vazio);
+            return;
+        }
+        av.alunos.forEach(aluno => {
+            const li = document.createElement('li');
+            li.className = 'item-nota';
+            if (alunoEditando === aluno.id) {
+                li.classList.add('editando');
+                const num = document.createElement('input');
+                num.type = 'number'; num.min = '1'; num.max = '999'; num.inputMode = 'numeric'; num.value = String(aluno.numero);
+                num.className = 'edit-numero'; num.setAttribute('aria-label', 'Número de chamada');
+                const nome = document.createElement('input');
+                nome.type = 'text'; nome.maxLength = 60; nome.value = aluno.nome;
+                nome.className = 'edit-nome'; nome.setAttribute('aria-label', 'Nome do aluno');
+                const salvar = document.createElement('button');
+                salvar.type = 'button'; salvar.className = 'btn-mini'; salvar.textContent = 'Salvar';
+                const cancelar = document.createElement('button');
+                cancelar.type = 'button'; cancelar.className = 'btn-mini claro'; cancelar.textContent = 'Cancelar';
+                const gravar = () => {
+                    try {
+                        app.editarAluno(aluno.id, { nome: nome.value, numero: num.value });
+                        alunoEditando = null;
+                        renderTudo();
+                        avisar('Aluno atualizado.', 'sucesso');
+                    } catch (erro) { avisar(erro.message, 'erro', 4500); }
+                };
+                salvar.addEventListener('click', gravar);
+                nome.addEventListener('keydown', (e) => { if (e.key === 'Enter') gravar(); });
+                cancelar.addEventListener('click', () => { alunoEditando = null; renderTurma(); });
+                li.append(num, nome, salvar, cancelar);
+                ul.appendChild(li);
+                return;
+            }
+            const info = document.createElement('div');
+            const nome = document.createElement('strong'); nome.textContent = rotuloAluno(aluno);
+            const resumo = document.createElement('small');
+            resumo.textContent = app.foiCorrigido(aluno.id) ? 'Corrigido nesta avaliação' : 'Ainda não corrigido nesta avaliação';
+            info.append(nome, resumo);
+
+            const acoes = document.createElement('div');
+            acoes.className = 'acoes-item';
+            const editar = document.createElement('button');
+            editar.type = 'button'; editar.className = 'btn-mini'; editar.textContent = 'Editar';
+            editar.setAttribute('aria-label', `Editar ${aluno.nome}`);
+            editar.addEventListener('click', () => { alunoEditando = aluno.id; renderTurma(); });
             const excluir = document.createElement('button');
             excluir.type = 'button'; excluir.className = 'btn-excluir-item';
             excluir.textContent = '✕'; excluir.title = 'Excluir aluno';
             excluir.setAttribute('aria-label', `Excluir ${aluno.nome}`);
             excluir.addEventListener('click', () => {
-                if (!confirm(`Excluir "${aluno.nome}" da lista${r ? ' e apagar a correção dele' : ''}?`)) return;
+                if (!confirm(`Excluir "${aluno.nome}" da turma? As correções dele em TODAS as avaliações da turma também serão apagadas.`)) return;
                 if (alunoSelecionado === aluno.id) { descartarCorrecaoEmAndamento(); alunoSelecionado = null; }
                 app.removerAluno(aluno.id);
-                renderTurma();
-                renderCorrigir();
+                renderTudo();
             });
-
-            acoes.append(badge, corrigir, excluir);
+            acoes.append(editar, excluir);
             li.append(info, acoes);
             ul.appendChild(li);
         });
@@ -771,14 +1101,16 @@
             const r = app.adicionarAlunos(campo.value);
             if (r.adicionados === 0 && r.ignorados === 0) { avisar('Digite pelo menos um nome.', 'erro'); campo.focus(); return; }
             campo.value = '';
-            renderTurma();
-            renderCorrigir();
+            renderTudo();
             avisar(`${plural(r.adicionados, 'aluno adicionado', 'alunos adicionados')}${r.ignorados ? ` (${plural(r.ignorados, 'repetido ignorado', 'repetidos ignorados')})` : ''}.`, r.adicionados ? 'sucesso' : 'info');
         });
 
+        el('btn-turma-corrigir').addEventListener('click', irParaCorrigir);
+
         el('btn-exportar-csv').addEventListener('click', () => {
             if (app.estatisticas().corrigidos === 0) { avisar('Não há alunos corrigidos para exportar.', 'erro'); return; }
-            baixar(`resultados_${nomeArquivoSeguro(app.avaliacao.titulo)}.csv`, app.csv(), 'text/csv;charset=utf-8;');
+            const ctx = app.contexto;
+            baixar(`resultados_${nomeArquivoSeguro(`${ctx.materia.nome}_${ctx.turma.nome}_${ctx.avaliacao.titulo}`)}.csv`, app.csv(), 'text/csv;charset=utf-8;');
         });
 
         el('btn-exportar-backup').addEventListener('click', () => {
@@ -799,14 +1131,14 @@
                 descartarCorrecaoEmAndamento();
                 carregarAreasEditando();
                 renderTudo();
-                avisar(`Backup restaurado: ${plural(r.avaliacoes, 'avaliação', 'avaliações')}.${r.avisos.length ? ' Alguns dados inconsistentes foram corrigidos.' : ''}`, 'sucesso', 5000);
+                avisar(`Backup restaurado: ${plural(r.materias, 'matéria', 'matérias')}, ${plural(r.avaliacoes, 'avaliação', 'avaliações')}.${r.avisos.length ? ' Alguns dados inconsistentes foram corrigidos.' : ''}`, 'sucesso', 5000);
             } catch (erro) {
                 avisar(erro.message, 'erro', 6000);
             }
         });
 
         el('btn-limpar-dados').addEventListener('click', () => {
-            if (!confirm('Apagar TODAS as avaliações, alunos e correções deste aparelho? Salve um backup antes se precisar dos dados. Não dá para desfazer.')) return;
+            if (!confirm('Apagar TODAS as matérias, turmas, avaliações, alunos e correções deste aparelho? Salve um backup antes se precisar dos dados. Não dá para desfazer.')) return;
             app.limparTudo();
             alunoSelecionado = null;
             descartarCorrecaoEmAndamento();
@@ -825,18 +1157,17 @@
         renderCabecalho();
         renderAreas();
         renderGradeMestre();
+        renderGabaritoCamera();
         renderCorrigir();
         renderTurma();
+        renderResultados();
     }
 
     function ligarAbas() {
         document.querySelectorAll('.aba-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 const destino = btn.getAttribute('data-alvo');
-                if (destino === 'secao-corrigir' && !app.gabaritoEstaCompleto) {
-                    avisar(`Preencha todas as ${app.avaliacao.totalQuestoes} questões do gabarito antes de corrigir alunos.`, 'erro', 4500);
-                    return;
-                }
+                if (destino === 'secao-corrigir') { irParaCorrigir(); return; }
                 mostrarAba(destino);
             });
         });
@@ -845,6 +1176,7 @@
     carregarAreasEditando();
     ligarAbas();
     ligarConfigurar();
+    ligarGabaritoCamera();
     ligarCorrigir();
     ligarTurma();
     renderTudo();

@@ -12,24 +12,51 @@
         <header class="cabecalho">
             <div>
                 <span class="logo">Gabarita</span>
-                <h1 id="titulo-exame-header" class="titulo-app">Nova avaliação</h1>
+                <h1 id="titulo-exame-header" class="titulo-app contexto-header" aria-label="Seleção atual"></h1>
             </div>
             <span id="badge-status-mestre" class="badge pendente">Gabarito pendente</span>
         </header>
 
         <nav class="abas-nav" role="tablist" aria-label="Etapas da correção">
             <button type="button" class="aba-btn ativa" role="tab" id="aba-mestre" aria-selected="true" aria-controls="secao-mestre" data-alvo="secao-mestre">1. Configurar</button>
-            <button type="button" class="aba-btn" role="tab" id="aba-corrigir" aria-selected="false" aria-controls="secao-corrigir" data-alvo="secao-corrigir">2. Corrigir</button>
-            <button type="button" class="aba-btn" role="tab" id="aba-resultados" aria-selected="false" aria-controls="secao-resultados" data-alvo="secao-resultados">3. Turma (<span id="contador-alunos">0</span>)</button>
+            <button type="button" class="aba-btn" role="tab" id="aba-turma" aria-selected="false" aria-controls="secao-turma" data-alvo="secao-turma">2. Turma (<span id="contador-alunos">0</span>)</button>
+            <button type="button" class="aba-btn" role="tab" id="aba-corrigir" aria-selected="false" aria-controls="secao-corrigir" data-alvo="secao-corrigir">3. Corrigir</button>
+            <button type="button" class="aba-btn" role="tab" id="aba-resultados" aria-selected="false" aria-controls="secao-resultados" data-alvo="secao-resultados">4. Resultados</button>
         </nav>
 
         <!-- ETAPA 1: CONFIGURAR -->
         <main id="secao-mestre" class="secao ativa" role="tabpanel" aria-labelledby="aba-mestre">
             <div class="card-info">
+                <h2>Matéria</h2>
+                <div class="grupo-input">
+                    <label for="select-materia">Matéria</label>
+                    <select id="select-materia"></select>
+                </div>
+                <div class="linha-botoes">
+                    <button type="button" id="btn-nova-materia" class="btn-secundario btn-compacto">+ Nova matéria</button>
+                    <button type="button" id="btn-renomear-materia" class="btn-secundario btn-compacto">Renomear</button>
+                    <button type="button" id="btn-excluir-materia" class="btn-link btn-link-perigo">Excluir</button>
+                </div>
+            </div>
+
+            <div class="card-info">
+                <h2>Turma</h2>
+                <div class="grupo-input">
+                    <label for="select-turma">Nome da Turma</label>
+                    <select id="select-turma"></select>
+                </div>
+                <div class="linha-botoes">
+                    <button type="button" id="btn-nova-turma" class="btn-secundario btn-compacto">+ Nova turma</button>
+                    <button type="button" id="btn-renomear-turma" class="btn-secundario btn-compacto">Renomear</button>
+                    <button type="button" id="btn-excluir-turma" class="btn-link btn-link-perigo">Excluir</button>
+                </div>
+            </div>
+
+            <div class="card-info">
                 <h2>Avaliação</h2>
                 <div class="linha-config">
                     <div class="grupo-input flex-maior">
-                        <label for="select-avaliacao">Avaliação em uso</label>
+                        <label for="select-avaliacao">Avaliação desta turma</label>
                         <select id="select-avaliacao"></select>
                     </div>
                 </div>
@@ -73,10 +100,63 @@
                         <p id="progresso-preenchimento">0 de 10 questões preenchidas</p>
                     </div>
                 </div>
-                <div id="grade-mestre" class="grade-questoes"></div>
-                <button type="button" id="btn-salvar-mestre" class="btn-primario">Conferir gabarito</button>
+                <div class="modo-gabarito" role="group" aria-label="Como cadastrar o gabarito">
+                    <button type="button" id="btn-modo-manual" class="btn-modo ativo" aria-pressed="true">Manual</button>
+                    <button type="button" id="btn-modo-camera" class="btn-modo" aria-pressed="false">Pela câmera</button>
+                </div>
+
+                <div id="gab-manual">
+                    <div id="grade-mestre" class="grade-questoes"></div>
+                    <button type="button" id="btn-salvar-mestre" class="btn-primario">Conferir gabarito</button>
+                </div>
+
+                <div id="gab-camera" class="oculto">
+                    <p id="dica-gab-camera">Fotografe o cartão-resposta mestre (o preenchido com o gabarito oficial), de cima, com as duas tabelas visíveis e boa luz. Você confere tudo antes de salvar.</p>
+                    <label for="input-foto-gabarito" id="btn-foto-gabarito" class="btn-primario btn-rotulo" tabindex="0" role="button">📷 Fotografar cartão mestre</label>
+                    <input type="file" id="input-foto-gabarito" accept="image/*" capture="environment" class="oculto-visual">
+                    <p id="aviso-gab-camera" class="aviso-leitura oculto" role="status"></p>
+
+                    <div id="painel-gab-camera" class="oculto">
+                        <p id="resumo-gab-camera" class="aviso-revisar" role="status"></p>
+                        <p class="instrucao-ajuste">Toque na letra certa de cada questão. Questões em branco, com dupla marcação ou duvidosas aparecem em destaque.</p>
+                        <details id="detalhe-gab" class="detalhe">
+                            <summary>Ver a leitura sobre a foto</summary>
+                            <p class="texto-suave">Verde: lida com segurança. Laranja: tinta parcial, confira. Vermelho: em branco ou dupla marcação.</p>
+                            <div class="par-canvas">
+                                <canvas id="canvas-gab-0"></canvas>
+                                <canvas id="canvas-gab-1"></canvas>
+                            </div>
+                        </details>
+                        <div id="grade-gab-camera" class="grade-questoes"></div>
+                        <button type="button" id="btn-confirmar-gabarito" class="btn-sucesso">✓ Confirmar e salvar gabarito</button>
+                        <button type="button" id="btn-descartar-gabarito" class="btn-secundario espaco-topo">Descartar esta leitura</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card-info">
+                <h2>Próximo passo</h2>
+                <div class="linha-botoes">
+                    <button type="button" id="btn-ir-turma" class="btn-secundario">👥 Turma</button>
+                    <button type="button" id="btn-ir-corrigir" class="btn-primario">✓ Corrigir</button>
+                </div>
+                <p id="info-proximo" class="texto-suave espaco-topo"></p>
             </div>
         </main>
+
+        <!-- ETAPA 2: TURMA (alunos) -->
+        <section id="secao-turma" class="secao" role="tabpanel" aria-labelledby="aba-turma">
+            <div class="card-lista">
+                <div class="topo-lista"><h2>Alunos da turma</h2></div>
+                <div class="grupo-input">
+                    <label for="textarea-alunos">Adicionar alunos (um por linha; "nº - nome" define o número de chamada)</label>
+                    <textarea id="textarea-alunos" rows="3" placeholder="01 - Ana Souza&#10;02 - Bruno Lima"></textarea>
+                </div>
+                <button type="button" id="btn-add-alunos" class="btn-secundario espaco-topo">Adicionar à lista</button>
+                <ul id="lista-alunos-salvos" class="lista-notas espaco-topo"></ul>
+            </div>
+            <button type="button" id="btn-turma-corrigir" class="btn-primario">✓ Corrigir</button>
+        </section>
 
         <!-- ETAPA 2: CORRIGIR -->
         <section id="secao-corrigir" class="secao" role="tabpanel" aria-labelledby="aba-corrigir">
@@ -86,13 +166,19 @@
                     <span id="progresso-correcao" class="texto-suave"></span>
                 </div>
                 <div class="grupo-input">
-                    <label for="select-aluno">Aluno a corrigir</label>
+                    <label for="input-busca-aluno">Quem é o aluno? Nome ou nº de chamada</label>
+                    <input type="text" id="input-busca-aluno" placeholder="Ex.: 12 ou Ana" maxlength="60" autocomplete="off" inputmode="search">
+                </div>
+                <ul id="lista-busca-aluno" class="lista-busca oculto"></ul>
+                <p id="aluno-selecionado-info" class="aluno-selecionado" role="status"></p>
+                <div class="grupo-input espaco-topo">
+                    <label for="select-aluno">Ou escolha na lista</label>
                     <select id="select-aluno"></select>
                 </div>
                 <div class="linha-config espaco-topo">
                     <div class="grupo-input flex-maior">
                         <label for="input-novo-aluno">Aluno não está na lista?</label>
-                        <input type="text" id="input-novo-aluno" placeholder="Nome ou código" maxlength="60" autocomplete="off">
+                        <input type="text" id="input-novo-aluno" placeholder="Nome (ou nº - nome)" maxlength="60" autocomplete="off">
                     </div>
                     <button type="button" id="btn-add-aluno-rapido" class="btn-secundario btn-compacto alinhar-base">Adicionar</button>
                 </div>
@@ -176,13 +262,8 @@
             </div>
 
             <div class="card-lista">
-                <div class="topo-lista"><h2>Alunos</h2></div>
-                <div class="grupo-input">
-                    <label for="textarea-alunos">Adicionar alunos (um nome por linha)</label>
-                    <textarea id="textarea-alunos" rows="3" placeholder="01 - Ana Souza&#10;02 - Bruno Lima"></textarea>
-                </div>
-                <button type="button" id="btn-add-alunos" class="btn-secundario espaco-topo">Adicionar à lista</button>
-                <ul id="lista-alunos-salvos" class="lista-notas espaco-topo"></ul>
+                <div class="topo-lista"><h2>Resultados por aluno</h2></div>
+                <ul id="lista-resultados" class="lista-notas"></ul>
             </div>
 
             <details class="card-lista detalhe-card">

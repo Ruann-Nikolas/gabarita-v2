@@ -18,10 +18,12 @@
     'use strict';
 
     const S = 3;                 // pixels por pt no espaço normalizado
+    const FATOR_ESCURO = 0.46;   // pixel "escuro" (caneta preta/grafite): cinza abaixo de FATOR·brilho do papel
     const LIMIAR_MARCA = 0.30;   // fração de preenchimento que conta como marcada
     const REVISAR_DE = 0.08;     // preenchimento parcial nessa faixa = duvidoso
     const REVISAR_ATE = 0.45;
     const LADO_MAIOR = 1600;
+    const LIMIAR_ANEIS = 0.07;       // pontuação mínima do refinamento por anéis (alinhado ≈ 0,09–0,36)
     const LIMIAR_ALINHAMENTO = 0.15; // contraste mínimo das faixas das linhas (ver contrasteListras)
 
     // Geometria em pt, medida no PDF do cartão em branco
@@ -336,6 +338,24 @@
         }
 
         const escala = (qs) => qs.map(q => q.map(p => [p[0] * 2, p[1] * 2]));
+        // Hipóteses de alinhamento (cantos externos, px da imagem) para o refinamento por anéis:
+        // cada candidato isolado serve como tabela esquerda ou direita (a outra é projetada).
+        const unicos = [];
+        for (const c of cand.slice().sort((a, b) => b.a - a.a)) {
+            const cx = c.q.reduce((s, p) => s + p[0], 0) / 4, cy = c.q.reduce((s, p) => s + p[1], 0) / 4;
+            if (!unicos.some(u => Math.hypot(u.cx - cx, u.cy - cy) < 8)) unicos.push({ cx, cy, q: c.q });
+        }
+        const hips = [];
+        for (const u of unicos) {
+            // o contorno pode ter cantos errados (rótulos, sombra): testa também o retângulo envolvente
+            const xs = u.q.map(p => p[0]), ys = u.q.map(p => p[1]);
+            const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+            for (const q of [u.q, [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]]) {
+                const d = projetarParceira(q, modelo, +1), e = projetarParceira(q, modelo, -1);
+                if (d) hips.push(externos(escala([q, d])));
+                if (e) hips.push(externos(escala([e, q])));
+            }
+        }
         let melhor = null;
         for (const A of cand) {
             for (const B of cand) {
@@ -352,7 +372,8 @@
                 if (!melhor || sc > melhor.sc) melhor = { sc, q: [A.q, B.q] };
             }
         }
-        if (melhor) return { quads: escala(melhor.q), origem: 'automatica', P };
+        if (melhor) hips.unshift(externos(escala(melhor.q)));
+        if (melhor) return { quads: escala(melhor.q), origem: 'automatica', P, hips };
 
         if (!cand.length) return null;
         const unico = cand.reduce((a, b) => (Math.abs(razaoQuad(b.q).r - 0.45) < Math.abs(razaoQuad(a.q).r - 0.45) ? b : a));
@@ -364,8 +385,118 @@
         else if (dentro(esq) && !dentro(dir)) par = [esq, unico.q];
         else par = unico.q[0][0] < w / 2 ? [unico.q, dir] : [esq, unico.q];
         if (!par[0] || !par[1]) return null;
-        return { quads: escala(par), origem: 'projetada', P };
+        return { quads: escala(par), origem: 'projetada', P, hips };
     }
+
+
+    // ------------------------------------------------------------------
+    // Refinamento por anéis: ajusta o alinhamento maximizando o contraste dos círculos
+    // impressos das 200 bolhas (anel escuro em r=6 pt, papel claro em r≈3,7 e r≈8).
+    // É o que torna a leitura independente do contorno das tabelas (que pode ser
+    // contaminado por rótulos "Biologia/Física/Química", sombras e iluminação).
+    // ------------------------------------------------------------------
+    const ANGULOS = 12;
+    const COS = Array.from({ length: ANGULOS }, (_, i) => Math.cos(2 * Math.PI * i / ANGULOS));
+    const SEN = Array.from({ length: ANGULOS }, (_, i) => Math.sin(2 * Math.PI * i / ANGULOS));
+
+    function cantosModelo(modelo) {
+        const x0 = modelo.tabelas[0].x0, x1 = modelo.tabelas[1].x1;
+        return [[x0, modelo.y0], [x1, modelo.y0], [x1, modelo.y1], [x0, modelo.y1]];
+    }
+
+    function tabelasDe(H, modelo) { // quads das duas tabelas a partir da homografia modelo(pt)→imagem
+        return modelo.tabelas.map(t => [[t.x0, modelo.y0], [t.x1, modelo.y0], [t.x1, modelo.y1], [t.x0, modelo.y1]]
+            .map(([x, y]) => aplicar(H, x, y)));
+    }
+
+    function cinzaEm(img, x, y) {
+        const { data, width: w, height: h } = img;
+        const xi = Math.round(x), yi = Math.round(y);
+        if (xi < 0 || yi < 0 || xi >= w || yi >= h) return null;
+        const o = (yi * w + xi) * 4;
+        return 0.299 * data[o] + 0.587 * data[o + 1] + 0.114 * data[o + 2];
+    }
+
+    // Média, sobre as bolhas, de (papel − anel)/P. ~0,2 alinhado; ~0 desalinhado.
+    function pontuarAnéis(img, H, modelo, P, so) {
+        let soma = 0, n = 0;
+        for (let t = 0; t < 2; t++) {
+            if (so !== undefined && so !== t) continue;
+            for (let i = 0; i < modelo.linhas; i++) {
+                const cy = modelo.yPrimeira + i * modelo.passo;
+                for (let k = 0; k < modelo.opcoes.length; k++) {
+                    const cx = modelo.xBolhas[t][k];
+                    for (let a = 0; a < ANGULOS; a++) {
+                        const p0 = aplicar(H, cx + 6.0 * COS[a], cy + 6.0 * SEN[a]);
+                        const p1 = aplicar(H, cx + 8.0 * COS[a], cy + 8.0 * SEN[a]);
+                        const p2 = aplicar(H, cx + 3.7 * COS[a], cy + 3.7 * SEN[a]);
+                        const g0 = cinzaEm(img, p0[0], p0[1]), g1 = cinzaEm(img, p1[0], p1[1]), g2 = cinzaEm(img, p2[0], p2[1]);
+                        if (g0 === null || g1 === null || g2 === null) { n++; continue; }
+                        // bolha preenchida: anel e miolo escuros → só o lado de fora conta, com meio peso
+                        soma += (g2 > g0 ? (g1 + g2) / 2 : g1 * 0.8 + g0 * 0.2) - g0;
+                        n++;
+                    }
+                }
+            }
+        }
+        return soma / n / P;
+    }
+
+    // Descida por coordenadas com passos decrescentes. Movimentos: cada canto, cada lado
+    // (dois cantos) e o quadrilátero inteiro — mover só um canto por vez fica preso em
+    // máximos locais, pois as bolhas se repetem em colunas e linhas.
+    const GRUPOS = [[0], [1], [2], [3], [0, 3], [1, 2], [0, 1], [3, 2], [0, 1, 2, 3]];
+    function descer(pt, pontuar, passos) {
+        let melhor = pontuar(pt);
+        for (const passo of passos) {
+            let mexeu = true, rodadas = 0;
+            while (mexeu && rodadas++ < 8) {
+                mexeu = false;
+                for (const g of GRUPOS) {
+                    for (const [dx, dy] of [[passo, 0], [-passo, 0], [0, passo], [0, -passo]]) {
+                        const c = pt.map(p => p.slice());
+                        for (const i of g) { c[i][0] += dx; c[i][1] += dy; }
+                        const sc = pontuar(c);
+                        if (sc > melhor + 1e-4) { melhor = sc; for (const i of g) pt[i] = c[i]; mexeu = true; }
+                    }
+                }
+            }
+        }
+        return melhor;
+    }
+
+    // Busca local nos 4 cantos externos.
+    function refinarAneis(img, cantos, modelo, P) {
+        const src = cantosModelo(modelo);
+        const pt = cantos.map(p => [p[0], p[1]]);
+        const pontuar = (c) => { const H = homografia(src, c); return H ? pontuarAnéis(img, H, modelo, P) : -1; };
+        const melhor = descer(pt, pontuar, [24, 12, 6, 3, 1.5, 0.75]);
+        const H = homografia(src, pt);
+        return H ? { pontos: pt, pontuacao: melhor, H, quads: tabelasDe(H, modelo) } : null;
+    }
+
+    // Segunda etapa: o papel nunca é perfeitamente plano (curvatura, dobras); ajusta cada
+    // tabela sozinha, com passos pequenos, partindo do alinhamento global.
+    function refinarTabela(img, quad, modelo, t, P) {
+        const tb = modelo.tabelas[t];
+        const src = [[tb.x0, modelo.y0], [tb.x1, modelo.y0], [tb.x1, modelo.y1], [tb.x0, modelo.y1]];
+        const pt = quad.map(p => [p[0], p[1]]);
+        const pontuar = (c) => { const H = homografia(src, c); return H ? pontuarAnéis(img, H, modelo, P, t) : -1; };
+        // varredura exaustiva de translação (as bolhas se repetem; a descida sozinha trava)
+        let bx = 0, by = 0, bs = pontuar(pt);
+        for (let dy = -16; dy <= 16; dy += 2) {
+            for (let dx = -16; dx <= 16; dx += 2) {
+                const sc = pontuar(pt.map(p => [p[0] + dx, p[1] + dy]));
+                if (sc > bs) { bs = sc; bx = dx; by = dy; }
+            }
+        }
+        pt.forEach(p => { p[0] += bx; p[1] += by; });
+        const melhor = descer(pt, pontuar, [6, 3, 1.5, 0.75]);
+        return { quad: pt, pontuacao: melhor };
+    }
+
+    // Cantos externos (esq-topo, dir-topo, dir-base, esq-base) a partir do par de quads
+    const externos = (q) => [q[0][0], q[1][1], q[1][2], q[0][3]];
 
     // ------------------------------------------------------------------
     // Medição das bolhas
@@ -433,7 +564,7 @@
                         n++;
                         if (ehAzul(rgb[0], rgb[1], rgb[2])) azuis++;
                         const gray = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2];
-                        if (gray < 0.40 * P) escuros++;
+                        if (gray < FATOR_ESCURO * P) escuros++;
                     }
                 }
                 linha.push(Math.max(azuis, escuros) / n);
@@ -487,6 +618,19 @@
      * Lê o cartão. opts.cantos = 4 pontos [x,y] da tabela da ESQUERDA (em qualquer ordem),
      * em coordenadas da imagem informada; dispensa a detecção automática.
      */
+    // Testa as hipóteses de alinhamento, refina as mais promissoras e devolve a melhor.
+    function melhorAlinhamento(img, hips, modelo, P) {
+        const src = cantosModelo(modelo);
+        const pont = hips.map(c => { const H = homografia(src, c); return { c, s: H ? pontuarAnéis(img, H, modelo, P) : -1 }; })
+            .sort((a, b) => b.s - a.s);
+        let melhor = null;
+        for (const h of pont.slice(0, 8)) {
+            const r = refinarAneis(img, h.c, modelo, P);
+            if (r && (!melhor || r.pontuacao > melhor.pontuacao)) melhor = r;
+        }
+        return melhor;
+    }
+
     function lerCartao(img, modelo = MODELO_GOIAS_40, opts = {}) {
         let achado;
         if (opts.cantos) {
@@ -498,13 +642,19 @@
             achado = acharTabelas(img, modelo, [esq, dir]);
             if (achado) {
                 achado.origem = 'manual-refinada';
+                achado.hips.push(externos([esq, dir]));
             } else {
                 const g = cinza(img);
-                achado = { quads: [esq, dir], origem: 'manual', P: percentil(g, img.width, img.height, 0.80) };
+                achado = { quads: [esq, dir], origem: 'manual', P: percentil(g, img.width, img.height, 0.80), hips: [externos([esq, dir])] };
             }
         } else {
             achado = acharTabelas(img, modelo);
             if (!achado) return { ok: false, motivo: 'Não consegui localizar as tabelas de respostas na foto.' };
+        }
+        const ref = melhorAlinhamento(img, [externos(achado.quads), ...(achado.hips || [])], modelo, achado.P);
+        if (ref) {
+            achado.quads = ref.quads.map((q, t) => refinarTabela(img, q, modelo, t, achado.P).quad);
+            achado.pontuacao = ref.pontuacao;
         }
         const fracoes = [];
         for (let t = 0; t < 2; t++) {
@@ -515,14 +665,14 @@
         const { respostas, revisar } = classificar(fracoes, modelo);
         // Alarmes de qualidade: o professor não pode confiar às cegas numa leitura desalinhada
         const umaMarcacao = fracoes.filter(fr => fr.filter(f => f > LIMIAR_MARCA).length === 1).length;
-        const aproximada = achado.origem === 'manual'; // busca refinada falhou: só os toques, imprecisos
+        const aproximada = !ref || ref.pontuacao < LIMIAR_ANEIS; // nem o refinamento por anéis achou as bolhas
         const alinhamento = Math.min(contrasteListras(img, achado.quads[0], modelo, 0, achado.P),
                                      contrasteListras(img, achado.quads[1], modelo, 1, achado.P));
         const desalinhada = alinhamento < LIMIAR_ALINHAMENTO;
         const muitasDuvidas = revisar.filter(Boolean).length > 0.15 * modelo.questoes; // antes de marcar tudo por 'aproximada'
         const suspeita = umaMarcacao < 0.6 * modelo.questoes || desalinhada || muitasDuvidas;
         if (aproximada) revisar.fill(true);
-        return { ok: true, origem: achado.origem, quads: achado.quads, fracoes, respostas, revisar, aproximada, suspeita, desalinhada, alinhamento, umaMarcacao };
+        return { ok: true, origem: achado.origem, quads: achado.quads, fracoes, respostas, revisar, aproximada, suspeita, desalinhada, alinhamento, umaMarcacao, pontuacao: achado.pontuacao };
     }
 
     // Imagem da tabela t com a perspectiva corrigida (para conferência visual)
@@ -546,7 +696,7 @@
         MODELO_GOIAS_40, LADO_MAIOR, LIMIAR_MARCA, lerCartao, normalizarTabela, centroBolha,
         // exportados para teste
         homografia, aplicar, ordenar, quad4, casco, classificar,
-        _interno: { cinza, metade, suavizar, percentil, fechar, componentes, area, razaoQuad }
+        _interno: { refinarAneis, pontuarAnéis, externos, cantosModelo, cinza, metade, suavizar, percentil, fechar, componentes, area, razaoQuad }
     };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     raiz.GabaritaLeitor = api;

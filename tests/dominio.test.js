@@ -165,12 +165,12 @@ test('proximoAlunoPendente segue a ordem da lista e dá a volta', () => {
 });
 
 // ---------- avaliações ----------
-test('várias avaliações: cada uma com seu gabarito, alunos e correções', () => {
+test('várias avaliações na mesma turma: gabarito e correções próprios, alunos compartilhados', () => {
     const app = prepararApp(['A', 'B'], ['Ana']);
     app.definirTitulo('Prova 1');
     const id1 = app.atualId;
     const id2 = app.criarAvaliacao('Prova 2');
-    assert.equal(app.avaliacao.alunos.length, 0);
+    assert.equal(app.avaliacao.alunos.length, 1); // mesma turma
     assert.equal(app.gabaritoEstaCompleto, false);
     app.selecionarAvaliacao(id1);
     assert.equal(app.avaliacao.alunos.length, 1);
@@ -219,7 +219,8 @@ test('CSV: colunas por área, só corrigidos, fórmulas neutralizadas, BOM e CRL
     assert.ok(csv.startsWith('﻿'));
     assert.equal(linhas.length, 3); // cabeçalho + 1 corrigido + vazio final
     assert.match(linhas[0], /Bio - Acertos \(de 1\);Bio - %;Fís - Acertos \(de 1\);Fís - %/);
-    assert.equal(linhas[1], '"Prova; ""X""";\'=cmd;2;1;0;0;1;50;1;100;0;0;A-!');
+    assert.equal(linhas[1], 'Matéria 1;Turma 1;"Prova; ""X""";1;\'=cmd;2;1;0;0;1;50;1;100;0;0;A-!');
+    assert.match(linhas[0], /Materia;Turma;Avaliacao;Numero;Aluno;/);
 });
 
 test('CSV de avaliação com uma área não repete colunas por área', () => {
@@ -262,7 +263,7 @@ test('migra o formato v3 (acertos gravados são descartados e recalculados)', ()
     assert.equal(a.areas[0].nome, 'Geral');
     const r = app.resultadoDoAluno(a.alunos[0].id);
     assert.deepEqual({ ac: r.acertos, b: r.brancos, x: r.rasuras }, { ac: 1, b: 1, x: 1 });
-    assert.ok(storage.dados.gabarita_v4);
+    assert.ok(storage.dados.gabarita_v5);
     assert.ok(storage.dados.gabarita_acertos_v3, 'não apaga os dados antigos');
 });
 
@@ -319,7 +320,7 @@ test('backup: exporta e importa em outro aparelho, guardando cópia dos dados an
     assert.deepEqual(destino.avaliacao.alunos.map(a => a.nome), ['Ana', 'Bia']);
     assert.equal(destino.resultadoDoAluno(destino.avaliacao.alunos[0].id).acertos, 2);
     const copia = JSON.parse(storage.dados.gabarita_v4_antes_de_importar);
-    assert.equal(copia.avaliacoes[0].alunos[0].nome, 'Aluno antigo');
+    assert.equal(copia.materias[0].turmas[0].alunos[0].nome, 'Aluno antigo');
 });
 
 test('backup inválido é recusado sem alterar nada', () => {
@@ -328,4 +329,127 @@ test('backup inválido é recusado sem alterar nada', () => {
     assert.throws(() => app.importarBackup({ app: 'outro', avaliacoes: [] }), /não é um backup/);
     assert.throws(() => app.importarBackup(JSON.stringify({ app: 'gabarita', avaliacoes: [] })), /não é um backup/);
     assert.equal(app.avaliacao.alunos.length, 1);
+});
+
+// ---------- hierarquia Matéria → Turma → Avaliação ----------
+test('começa com Matéria 1 → Turma 1 → Nova avaliação e informa o contexto', () => {
+    const app = new Gerenciador(criarStorage());
+    assert.deepEqual(app.contexto, {
+        materia: { id: 1, nome: 'Matéria 1' }, turma: { id: 1, nome: 'Turma 1' }, avaliacao: { id: 1, titulo: 'Nova avaliação' }
+    });
+});
+
+test('matérias, turmas e avaliações: criar, renomear, selecionar e excluir (nunca fica vazio)', () => {
+    const app = new Gerenciador(criarStorage());
+    app.renomearMateria('Biologia');
+    const t1 = app.turmaId;
+    const t2 = app.criarTurma('3º B');
+    assert.deepEqual(app.turmas.map(t => t.nome), ['Turma 1', '3º B']);
+    app.criarMateria('Física');
+    assert.deepEqual(app.materias.map(m => m.nome), ['Biologia', 'Física']);
+    assert.equal(app.contexto.turma.nome, 'Turma 1'); // matéria nova tem sua própria turma
+    app.selecionarMateria(app.materias[0].id);
+    assert.equal(app.contexto.materia.nome, 'Biologia');
+    app.selecionarTurma(t2);
+    assert.equal(app.contexto.turma.nome, '3º B');
+    app.excluirTurma(t2);
+    assert.equal(app.turmaId, t1);
+    app.excluirTurma(t1);
+    assert.equal(app.turmas.length, 1); // recria uma turma vazia
+    app.excluirMateria(app.materias[0].id);
+    app.excluirMateria(app.materias[0].id);
+    assert.equal(app.materias.length, 1);
+    assert.equal(app.contexto.materia.nome, 'Matéria 1');
+    assert.throws(() => app.selecionarTurma(9999), /não encontrada/);
+});
+
+test('alunos pertencem à turma: outra turma começa vazia e remover aluno apaga suas correções em todas as avaliações', () => {
+    const app = prepararApp(['A'], ['Ana', 'Bia']);
+    const turma1 = app.turmaId;
+    corrigir(app, 'Ana', { 0: 'A' });
+    app.criarAvaliacao('Prova 2');
+    app.alterarQuantidadeQuestoes(1); app.marcarGabarito(0, 'A');
+    corrigir(app, 'Ana', { 0: 'B' });
+    app.criarTurma('Outra');
+    assert.equal(app.avaliacao.alunos.length, 0);
+    assert.equal(app.avaliacao.titulo, 'Nova avaliação');
+    app.selecionarTurma(turma1);
+    const ana = app.avaliacao.alunos.find(a => a.nome === 'Ana');
+    app.removerAluno(ana.id);
+    for (const a of app.avaliacoes) {
+        app.selecionarAvaliacao(a.id);
+        assert.deepEqual(Object.keys(app.avaliacao.correcoes), []);
+    }
+    assert.equal(app.avaliacao.alunos.length, 1);
+});
+
+test('número de chamada: lido de "nº - nome", sequencial quando falta, único e editável', () => {
+    const app = new Gerenciador(criarStorage());
+    const r = app.adicionarAlunos('05 - Ana\nBia\n5 - Caio\n12. Duda\nana');
+    assert.deepEqual(r, { adicionados: 3, ignorados: 2 }); // Caio (nº 5 repetido) e "ana" (nome repetido)
+    assert.deepEqual(app.avaliacao.alunos.map(a => [a.numero, a.nome]), [[1, 'Bia'], [5, 'Ana'], [12, 'Duda']]);
+    const bia = app.avaliacao.alunos[0];
+    app.editarAluno(bia.id, { nome: 'Bianca', numero: 2 });
+    assert.deepEqual(app.avaliacao.alunos.map(a => a.numero), [2, 5, 12]);
+    assert.throws(() => app.editarAluno(bia.id, { numero: 5 }), /número/);
+    assert.throws(() => app.editarAluno(bia.id, { nome: 'ana' }), /nome/);
+    assert.throws(() => app.editarAluno(bia.id, { nome: '  ' }), /vazio/);
+    assert.throws(() => app.editarAluno(bia.id, { numero: 0 }), /1 a 999/);
+    assert.equal(app.avaliacao.alunos[0].nome, 'Bianca');
+});
+
+test('buscarAluno: por número de chamada exato ou parte do nome (sem acento/maiúscula)', () => {
+    const app = new Gerenciador(criarStorage());
+    app.adicionarAlunos('1 - José Álvares\n2 - Maria José\n12 - Ana');
+    assert.deepEqual(app.buscarAluno('12').map(a => a.nome), ['Ana']);
+    assert.deepEqual(app.buscarAluno('jose').map(a => a.nome), ['José Álvares', 'Maria José']);
+    assert.deepEqual(app.buscarAluno('  '), []);
+    assert.deepEqual(app.buscarAluno('99'), []);
+});
+
+test('definirGabarito aceita só A–E em todas as questões', () => {
+    const app = new Gerenciador(criarStorage());
+    app.alterarQuantidadeQuestoes(3);
+    assert.throws(() => app.definirGabarito(['A', null, 'C']), /todas as questões/);
+    assert.throws(() => app.definirGabarito(['A', 'B']), /todas as questões/);
+    assert.throws(() => app.definirGabarito(['A', '!', 'C']), /todas as questões/);
+    app.definirGabarito(['A', 'B', 'C']);
+    assert.equal(app.gabaritoEstaCompleto, true);
+});
+
+test('migra v4: cada avaliação antiga vira uma turma da matéria "Geral", sem perder alunos nem correções', () => {
+    const v4 = {
+        versao: 4, atualId: 2,
+        avaliacoes: [
+            { id: 1, titulo: 'Bim 1', totalQuestoes: 2, gabarito: ['A', 'B'], areas: [{ id: 1, nome: 'Geral', inicio: 1, fim: 2 }],
+              alunos: [{ id: 1, nome: '01 - Ana' }, { id: 2, nome: 'Bia' }], correcoes: { 1: ['A', 'B'] } },
+            { id: 2, titulo: 'Bim 2', totalQuestoes: 1, gabarito: ['C'], alunos: [{ id: 1, nome: 'Caio' }], correcoes: { 1: ['C'] } }
+        ]
+    };
+    const storage = criarStorage({ gabarita_v4: JSON.stringify(v4) });
+    const app = new Gerenciador(storage);
+    assert.match(app.avisoCarga, /migrados/);
+    assert.deepEqual(app.materias.map(m => m.nome), ['Geral']);
+    assert.deepEqual(app.turmas.map(t => t.nome), ['Bim 1', 'Bim 2']);
+    assert.equal(app.contexto.turma.nome, 'Bim 2'); // seleção anterior preservada
+    assert.equal(app.resultadoDoAluno(app.avaliacao.alunos[0].id).acertos, 1);
+    app.selecionarTurma(app.turmas[0].id);
+    assert.deepEqual(app.avaliacao.alunos.map(a => [a.numero, a.nome]), [[1, 'Ana'], [2, 'Bia']]);
+    assert.equal(app.resultadoDoAluno(app.avaliacao.alunos[0].id).acertos, 2);
+    assert.equal(storage.dados.gabarita_v4, JSON.stringify(v4), 'dados antigos intactos');
+    assert.ok(storage.dados.gabarita_v5);
+});
+
+test('v5 persiste a seleção e recarrega; backup v4 também pode ser importado', () => {
+    const storage = criarStorage();
+    const app = prepararApp(['A', 'B'], ['Ana'], storage);
+    app.renomearMateria('Química');
+    app.criarTurma('2º C');
+    const outra = new Gerenciador(storage);
+    assert.equal(outra.contexto.materia.nome, 'Química');
+    assert.equal(outra.contexto.turma.nome, '2º C');
+    const r = outra.importarBackup({ app: 'gabarita', versao: 4, atualId: 1, avaliacoes: [{ id: 1, titulo: 'Velha', totalQuestoes: 1, gabarito: ['A'], alunos: [{ id: 1, nome: 'Zé' }], correcoes: {} }] });
+    assert.deepEqual([r.materias, r.avaliacoes], [1, 1]);
+    assert.equal(outra.contexto.turma.nome, 'Velha');
+    assert.equal(outra.avaliacao.alunos[0].nome, 'Zé');
 });

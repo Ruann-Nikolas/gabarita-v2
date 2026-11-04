@@ -9,7 +9,9 @@
  * - RN04: Uma avaliação pode ter várias áreas (ex.: Biologia 1–13, Física 14–25). Cada
  *         área é um intervalo de questões, sem sobreposição. Todo resultado é calculado
  *         no total e por área.
- * - RN05: Cada avaliação tem sua lista de alunos; a correção é vinculada ao aluno (id).
+ * - RN05: Hierarquia Matéria → Turma → Avaliação → Correção. Os alunos pertencem à turma
+ *         (nome e número de chamada) e valem para todas as avaliações dela; a correção é
+ *         vinculada ao aluno (id) dentro de cada avaliação.
  */
 (function (raiz) {
     'use strict';
@@ -17,8 +19,9 @@
     const LIMITE_MAX_QUESTOES = 60;
     const OPCOES_VALIDAS = ['A', 'B', 'C', 'D', 'E'];
     const CODIGO_RASURA = '!';
-    const VERSAO = 4;
-    const KEY = 'gabarita_v4';
+    const VERSAO = 5;
+    const KEY = 'gabarita_v5';
+    const KEY_V4 = 'gabarita_v4';
     const KEY_V3 = 'gabarita_acertos_v3';
     const KEY_COPIA = 'gabarita_v4_copia_corrompida';
     const KEY_ANTES_IMPORTAR = 'gabarita_v4_antes_de_importar';
@@ -150,13 +153,12 @@
             totalQuestoes: total,
             areas: [{ id: 1, nome: 'Geral', inicio: 1, fim: total }],
             gabarito: Array(total).fill(null),
-            alunos: [],
             correcoes: {}
         };
     }
 
     // Saneia uma avaliação vinda do armazenamento ou de um backup. Nunca lança.
-    function normalizarAvaliacao(bruta, id, avisos) {
+    function normalizarAvaliacao(bruta, id, avisos, idsAlunos) {
         const a = bruta && typeof bruta === 'object' ? bruta : {};
         let total = a.totalQuestoes;
         if (!Number.isInteger(total) || total < 1 || total > LIMITE_MAX_QUESTOES) {
@@ -176,52 +178,114 @@
             av.gabarito = Array.from({ length: total }, (_, i) => (OPCOES_VALIDAS.includes(a.gabarito[i]) ? a.gabarito[i] : null));
         }
 
-        const idsUsados = new Set();
-        const nomesUsados = new Set();
-        let proximo = 1;
-        if (Array.isArray(a.alunos)) {
-            for (const al of a.alunos) {
-                const nome = al && typeof al.nome === 'string' ? limparTexto(al.nome, 60) : '';
-                if (!nome || nomesUsados.has(nome.toLowerCase())) { avisos.push('aluno inválido ou repetido ignorado'); continue; }
-                let aid = Number.isInteger(al.id) && al.id > 0 ? al.id : null;
-                if (aid === null || idsUsados.has(aid)) {
-                    while (idsUsados.has(proximo)) proximo++;
-                    aid = proximo;
-                }
-                idsUsados.add(aid);
-                nomesUsados.add(nome.toLowerCase());
-                av.alunos.push({ id: aid, nome });
-            }
-        }
         if (a.correcoes && typeof a.correcoes === 'object') {
             for (const [chave, resp] of Object.entries(a.correcoes)) {
                 const aid = Number(chave);
-                if (!idsUsados.has(aid) || !Array.isArray(resp)) { avisos.push('correção sem aluno correspondente ignorada'); continue; }
+                if (!idsAlunos.has(aid) || !Array.isArray(resp)) { avisos.push('correção sem aluno correspondente ignorada'); continue; }
                 av.correcoes[aid] = Array.from({ length: total }, (_, i) => normalizarResposta(resp[i]));
             }
         }
         return av;
     }
 
+    // "12 - Ana Souza" → { numero: 12, nome: 'Ana Souza' }; sem número → numero null
+    function lerLinhaAluno(linha) {
+        const t = limparTexto(linha, 60);
+        const m = t.match(/^(\d{1,3})\s*[-–.):]\s*(.+)$/);
+        if (m && limparTexto(m[2], 60)) return { numero: Number(m[1]), nome: limparTexto(m[2], 60) };
+        return { numero: null, nome: t };
+    }
+
+    // Saneia a lista de alunos da turma. Nomes e números de chamada não se repetem.
+    function normalizarAlunos(lista, avisos) {
+        const idsUsados = new Set(), nomes = new Set(), numeros = new Set();
+        const alunos = [];
+        let proximoId = 1;
+        for (const al of Array.isArray(lista) ? lista : []) {
+            let nome = al && typeof al.nome === 'string' ? limparTexto(al.nome, 60) : '';
+            let numero = al && Number.isInteger(al.numero) && al.numero >= 1 && al.numero <= 999 ? al.numero : null;
+            if (numero === null && nome) { const l = lerLinhaAluno(nome); nome = l.nome; numero = l.numero; }
+            if (!nome || nomes.has(nome.toLowerCase())) { avisos.push('aluno inválido ou repetido ignorado'); continue; }
+            let id = al && Number.isInteger(al.id) && al.id > 0 ? al.id : null;
+            if (id === null || idsUsados.has(id)) { while (idsUsados.has(proximoId)) proximoId++; id = proximoId; }
+            idsUsados.add(id); nomes.add(nome.toLowerCase());
+            if (numero !== null && numeros.has(numero)) numero = null;
+            if (numero !== null) numeros.add(numero);
+            alunos.push({ id, nome, numero });
+        }
+        let livre = 1;
+        for (const al of alunos) {
+            if (al.numero === null) { while (numeros.has(livre)) livre++; al.numero = livre; numeros.add(livre); }
+        }
+        return ordenarAlunos(alunos);
+    }
+
+    const ordenarAlunos = (alunos) => alunos.sort((a, b) => a.numero - b.numero || a.id - b.id);
+
+    const nomeOu = (v, padrao, max = 50) => limparTexto(typeof v === 'string' ? v : '', max) || padrao;
+
+    // id único dentro de `usados`; aceita o pedido se for inteiro positivo ainda livre
+    function idLivre(usados, pedido) {
+        let id = Number.isInteger(pedido) && pedido > 0 && !usados.has(pedido) ? pedido : null;
+        if (id === null) { id = 1; while (usados.has(id)) id++; }
+        usados.add(id);
+        return id;
+    }
+
+    function novaTurma(ids, nome) {
+        return { id: idLivre(ids.turmas), nome, alunos: [], avaliacoes: [novaAvaliacao(idLivre(ids.avaliacoes))] };
+    }
+
+    function novaMateria(ids, nome) {
+        return { id: idLivre(ids.materias), nome, turmas: [novaTurma(ids, 'Turma 1')] };
+    }
+
+    // Saneia o estado completo (v5). Garante: ≥1 matéria; cada matéria ≥1 turma; cada turma ≥1 avaliação.
     function normalizarEstado(dados) {
         const avisos = [];
-        const avaliacoes = [];
-        if (dados && Array.isArray(dados.avaliacoes)) {
-            const usados = new Set();
-            let proximo = 1;
-            for (const bruta of dados.avaliacoes) {
-                let id = bruta && Number.isInteger(bruta.id) && bruta.id > 0 ? bruta.id : null;
-                if (id === null || usados.has(id)) {
-                    while (usados.has(proximo)) proximo++;
-                    id = proximo;
+        const ids = { materias: new Set(), turmas: new Set(), avaliacoes: new Set() };
+        const materias = [];
+        for (const m of dados && Array.isArray(dados.materias) ? dados.materias : []) {
+            const mat = { id: idLivre(ids.materias, m && m.id), nome: nomeOu(m && m.nome, 'Matéria'), turmas: [] };
+            for (const t of m && Array.isArray(m.turmas) ? m.turmas : []) {
+                const alunos = normalizarAlunos(t && t.alunos, avisos);
+                const idsAlunos = new Set(alunos.map(x => x.id));
+                const turma = { id: idLivre(ids.turmas, t && t.id), nome: nomeOu(t && t.nome, 'Turma'), alunos, avaliacoes: [] };
+                for (const bruta of t && Array.isArray(t.avaliacoes) ? t.avaliacoes : []) {
+                    const id = idLivre(ids.avaliacoes, bruta && bruta.id);
+                    turma.avaliacoes.push(normalizarAvaliacao(bruta, id, avisos, idsAlunos));
                 }
-                usados.add(id);
-                avaliacoes.push(normalizarAvaliacao(bruta, id, avisos));
+                if (turma.avaliacoes.length === 0) turma.avaliacoes.push(novaAvaliacao(idLivre(ids.avaliacoes)));
+                mat.turmas.push(turma);
             }
+            if (mat.turmas.length === 0) mat.turmas.push(novaTurma(ids, 'Turma 1'));
+            materias.push(mat);
         }
-        const pedido = dados ? dados.atualId : undefined;
-        const atualId = avaliacoes.some(a => a.id === pedido) ? pedido : (avaliacoes[0] ? avaliacoes[0].id : null);
-        return { avaliacoes, atualId, avisos };
+        if (materias.length === 0) return { materias, sel: null, avisos };
+
+        // seleção: usa a pedida se existir; senão, a primeira de cada nível
+        const pedido = (dados && dados.sel) || {};
+        const mat = materias.find(m => m.id === pedido.materiaId) || materias[0];
+        const turma = mat.turmas.find(t => t.id === pedido.turmaId) || mat.turmas[0];
+        const av = turma.avaliacoes.find(a => a.id === pedido.avaliacaoId) || turma.avaliacoes[0];
+        return { materias, sel: { materiaId: mat.id, turmaId: turma.id, avaliacaoId: av.id }, avisos };
+    }
+
+    // v4 (lista de avaliações, cada uma com seus alunos) → v5. Sem perda: cada avaliação antiga
+    // vira uma turma (com o mesmo nome) dentro da matéria "Geral".
+    function migrarV4(d) {
+        const lista = d && Array.isArray(d.avaliacoes) ? d.avaliacoes : [];
+        const turmas = lista.map((a, i) => {
+            const { alunos, ...avaliacao } = a && typeof a === 'object' ? a : {};
+            const titulo = nomeOu(avaliacao.titulo, `Turma ${i + 1}`);
+            return { id: i + 1, nome: titulo, alunos: Array.isArray(alunos) ? alunos : [], avaliacoes: [{ ...avaliacao, id: i + 1 }] };
+        });
+        const idx = lista.findIndex(a => a && a.id === d.atualId);
+        const atual = turmas[idx >= 0 ? idx : 0];
+        return {
+            materias: [{ id: 1, nome: 'Geral', turmas }],
+            sel: atual ? { materiaId: 1, turmaId: atual.id, avaliacaoId: atual.avaliacoes[0].id } : null
+        };
     }
 
     // Converte o formato da versão anterior (uma única avaliação)
@@ -235,10 +299,10 @@
                 correcoes[i + 1] = al && al.respostas;
             });
         }
-        return normalizarEstado({
+        return normalizarEstado(migrarV4({
             avaliacoes: [{ id: 1, titulo: d && d.titulo, totalQuestoes: total, gabarito: d && d.gabaritoMestre, alunos, correcoes }],
             atualId: 1
-        });
+        }));
     }
 
     // ------------------------------------------------------------------
@@ -246,7 +310,7 @@
     // ------------------------------------------------------------------
     class Gerenciador {
         #storage;
-        #estado = { avaliacoes: [], atualId: null };
+        #estado = { materias: [], sel: null };
         #rascunho = null; // { alunoId, respostas, origem }
         #falhaNotificada = false;
 
@@ -258,11 +322,40 @@
             this.#carregar();
         }
 
-        // ---- leitura -------------------------------------------------
-        #atual() { return this.#estado.avaliacoes.find(a => a.id === this.#estado.atualId); }
-        get avaliacao() { return clonar(this.#atual()); }
-        get avaliacoes() { return this.#estado.avaliacoes.map(a => ({ id: a.id, titulo: a.titulo })); }
-        get atualId() { return this.#estado.atualId; }
+        // ---- navegação: matéria → turma → avaliação -------------------
+        #materia() { return this.#estado.materias.find(m => m.id === this.#estado.sel.materiaId); }
+        #turma() { return this.#materia().turmas.find(t => t.id === this.#estado.sel.turmaId); }
+        #atual() { return this.#turma().avaliacoes.find(a => a.id === this.#estado.sel.avaliacaoId); }
+        #ids() {
+            const ids = { materias: new Set(), turmas: new Set(), avaliacoes: new Set() };
+            for (const m of this.#estado.materias) {
+                ids.materias.add(m.id);
+                for (const t of m.turmas) { ids.turmas.add(t.id); t.avaliacoes.forEach(a => ids.avaliacoes.add(a.id)); }
+            }
+            return ids;
+        }
+        #proximoId(conjunto) { return Math.max(0, ...conjunto) + 1; }
+        // Seleciona turma (e a 1ª avaliação dela) dentro da matéria atual
+        #irParaTurma(materia, turma) {
+            this.#estado.sel = { materiaId: materia.id, turmaId: turma.id, avaliacaoId: turma.avaliacoes[0].id };
+            this.#rascunho = null;
+        }
+
+        get materias() { return this.#estado.materias.map(m => ({ id: m.id, nome: m.nome, turmas: m.turmas.length })); }
+        get turmas() { return this.#materia().turmas.map(t => ({ id: t.id, nome: t.nome, alunos: t.alunos.length, avaliacoes: t.avaliacoes.length })); }
+        get materiaId() { return this.#estado.sel.materiaId; }
+        get turmaId() { return this.#estado.sel.turmaId; }
+        get contexto() {
+            return {
+                materia: { id: this.#materia().id, nome: this.#materia().nome },
+                turma: { id: this.#turma().id, nome: this.#turma().nome },
+                avaliacao: { id: this.#atual().id, titulo: this.#atual().titulo }
+            };
+        }
+        // A avaliação atual, com os alunos da turma
+        get avaliacao() { return clonar({ ...this.#atual(), alunos: this.#turma().alunos }); }
+        get avaliacoes() { return this.#turma().avaliacoes.map(a => ({ id: a.id, titulo: a.titulo })); }
+        get atualId() { return this.#estado.sel.avaliacaoId; }
         get gabaritoEstaCompleto() {
             const a = this.#atual();
             return a.gabarito.length === a.totalQuestoes && a.gabarito.every(r => OPCOES_VALIDAS.includes(r));
@@ -270,31 +363,92 @@
         get rascunho() { return this.#rascunho ? clonar(this.#rascunho) : null; }
         get rascunhoTemMarcacoes() { return !!this.#rascunho && this.#rascunho.respostas.some(r => r !== null); }
 
-        // ---- avaliações ----------------------------------------------
+        // ---- matérias ------------------------------------------------
+        selecionarMateria(id) {
+            const m = this.#estado.materias.find(x => x.id === id);
+            if (!m) throw new Error('Matéria não encontrada.');
+            this.#irParaTurma(m, m.turmas[0]);
+            this.salvarDados();
+        }
+
+        criarMateria(nome) {
+            const ids = this.#ids();
+            const m = novaMateria({ materias: ids.materias, turmas: ids.turmas, avaliacoes: ids.avaliacoes }, nomeOu(nome, 'Nova matéria'));
+            this.#estado.materias.push(m);
+            this.#irParaTurma(m, m.turmas[0]);
+            this.salvarDados();
+            return m.id;
+        }
+
+        renomearMateria(nome) {
+            const limpo = limparTexto(nome, 50);
+            if (limpo) { this.#materia().nome = limpo; this.salvarDados(); }
+        }
+
+        excluirMateria(id) {
+            this.#estado.materias = this.#estado.materias.filter(m => m.id !== id);
+            if (this.#estado.materias.length === 0) {
+                this.#estado.materias.push(novaMateria({ materias: new Set(), turmas: new Set(), avaliacoes: new Set() }, 'Matéria 1'));
+            }
+            const m = this.#estado.materias.find(x => x.id === this.#estado.sel.materiaId) || this.#estado.materias[0];
+            this.#irParaTurma(m, m.turmas[0]);
+            this.salvarDados();
+        }
+
+        // ---- turmas --------------------------------------------------
+        selecionarTurma(id) {
+            const m = this.#materia();
+            const t = m.turmas.find(x => x.id === id);
+            if (!t) throw new Error('Turma não encontrada.');
+            this.#irParaTurma(m, t);
+            this.salvarDados();
+        }
+
+        criarTurma(nome) {
+            const m = this.#materia();
+            const t = novaTurma(this.#ids(), nomeOu(nome, 'Nova turma'));
+            m.turmas.push(t);
+            this.#irParaTurma(m, t);
+            this.salvarDados();
+            return t.id;
+        }
+
+        renomearTurma(nome) {
+            const limpo = limparTexto(nome, 50);
+            if (limpo) { this.#turma().nome = limpo; this.salvarDados(); }
+        }
+
+        excluirTurma(id) {
+            const m = this.#materia();
+            m.turmas = m.turmas.filter(t => t.id !== id);
+            if (m.turmas.length === 0) m.turmas.push(novaTurma(this.#ids(), 'Turma 1'));
+            const t = m.turmas.find(x => x.id === this.#estado.sel.turmaId) || m.turmas[0];
+            this.#irParaTurma(m, t);
+            this.salvarDados();
+        }
+
+        // ---- avaliações (da turma atual) -------------------------------
         selecionarAvaliacao(id) {
-            if (!this.#estado.avaliacoes.some(a => a.id === id)) throw new Error('Avaliação não encontrada.');
-            this.#estado.atualId = id;
+            if (!this.#turma().avaliacoes.some(a => a.id === id)) throw new Error('Avaliação não encontrada.');
+            this.#estado.sel.avaliacaoId = id;
             this.#rascunho = null;
             this.salvarDados();
         }
 
         criarAvaliacao(titulo) {
-            const id = this.#estado.avaliacoes.reduce((m, a) => Math.max(m, a.id), 0) + 1;
-            this.#estado.avaliacoes.push(novaAvaliacao(id, titulo));
-            this.#estado.atualId = id;
+            const id = this.#proximoId(this.#ids().avaliacoes);
+            this.#turma().avaliacoes.push(novaAvaliacao(id, titulo));
+            this.#estado.sel.avaliacaoId = id;
             this.#rascunho = null;
             this.salvarDados();
             return id;
         }
 
         excluirAvaliacao(id) {
-            this.#estado.avaliacoes = this.#estado.avaliacoes.filter(a => a.id !== id);
-            if (this.#estado.avaliacoes.length === 0) {
-                this.#estado.avaliacoes.push(novaAvaliacao(1));
-            }
-            if (!this.#estado.avaliacoes.some(a => a.id === this.#estado.atualId)) {
-                this.#estado.atualId = this.#estado.avaliacoes[0].id;
-            }
+            const t = this.#turma();
+            t.avaliacoes = t.avaliacoes.filter(a => a.id !== id);
+            if (t.avaliacoes.length === 0) t.avaliacoes.push(novaAvaliacao(this.#proximoId(this.#ids().avaliacoes)));
+            if (!t.avaliacoes.some(a => a.id === this.#estado.sel.avaliacaoId)) this.#estado.sel.avaliacaoId = t.avaliacoes[0].id;
             this.#rascunho = null;
             this.salvarDados();
         }
@@ -354,31 +508,75 @@
             }
         }
 
-        // ---- alunos --------------------------------------------------
-        // Um nome por linha. Ignora linhas vazias e nomes que já existem.
-        adicionarAlunos(texto) {
+        // Substitui o gabarito inteiro (ex.: lido pela câmera e conferido). Só aceita A–E em todas as questões.
+        definirGabarito(respostas) {
             const a = this.#atual();
-            const existentes = new Set(a.alunos.map(x => x.nome.toLowerCase()));
-            let proximo = a.alunos.reduce((m, x) => Math.max(m, x.id), 0) + 1;
+            if (!Array.isArray(respostas) || respostas.length !== a.totalQuestoes || !respostas.every(r => OPCOES_VALIDAS.includes(r))) {
+                throw new Error('O gabarito precisa ter uma alternativa (A–E) em todas as questões.');
+            }
+            a.gabarito = [...respostas];
+            this.salvarDados();
+        }
+
+        // ---- alunos (da turma) -----------------------------------------
+        // Um aluno por linha, "nome" ou "nº - nome". Ignora vazias, nomes repetidos e números já usados.
+        adicionarAlunos(texto) {
+            const t = this.#turma();
+            const nomes = new Set(t.alunos.map(x => x.nome.toLowerCase()));
+            const numeros = new Set(t.alunos.map(x => x.numero));
+            let proximoId = t.alunos.reduce((m, x) => Math.max(m, x.id), 0) + 1;
+            let livre = 1;
             let adicionados = 0, ignorados = 0;
             for (const linha of String(texto || '').split(/\r?\n/)) {
-                const nome = limparTexto(linha, 60);
+                const { numero: pedido, nome } = lerLinhaAluno(linha);
                 if (!nome) continue;
-                if (existentes.has(nome.toLowerCase())) { ignorados++; continue; }
-                existentes.add(nome.toLowerCase());
-                a.alunos.push({ id: proximo++, nome });
+                if (nomes.has(nome.toLowerCase()) || (pedido !== null && numeros.has(pedido))) { ignorados++; continue; }
+                let numero = pedido;
+                if (numero === null) { while (numeros.has(livre)) livre++; numero = livre; }
+                nomes.add(nome.toLowerCase()); numeros.add(numero);
+                t.alunos.push({ id: proximoId++, nome, numero });
                 adicionados++;
             }
-            if (adicionados) this.salvarDados();
+            if (adicionados) { ordenarAlunos(t.alunos); this.salvarDados(); }
             return { adicionados, ignorados };
         }
 
+        // Altera nome e/ou número de chamada. Lança erro se ficar vazio ou repetir outro aluno.
+        editarAluno(id, { nome, numero } = {}) {
+            const t = this.#turma();
+            const al = t.alunos.find(x => x.id === id);
+            if (!al) throw new Error('Aluno não encontrado.');
+            const novoNome = nome === undefined ? al.nome : limparTexto(nome, 60);
+            const novoNumero = numero === undefined ? al.numero : Number(numero);
+            if (!novoNome) throw new Error('O nome não pode ficar vazio.');
+            if (!Number.isInteger(novoNumero) || novoNumero < 1 || novoNumero > 999) throw new Error('O número de chamada deve ser de 1 a 999.');
+            if (t.alunos.some(x => x.id !== id && x.nome.toLowerCase() === novoNome.toLowerCase())) throw new Error('Já existe um aluno com esse nome.');
+            if (t.alunos.some(x => x.id !== id && x.numero === novoNumero)) throw new Error('Já existe um aluno com esse número de chamada.');
+            al.nome = novoNome; al.numero = novoNumero;
+            ordenarAlunos(t.alunos);
+            this.salvarDados();
+        }
+
+        // Remove o aluno e suas correções em todas as avaliações da turma
         removerAluno(id) {
-            const a = this.#atual();
-            a.alunos = a.alunos.filter(x => x.id !== id);
-            delete a.correcoes[id];
+            const t = this.#turma();
+            t.alunos = t.alunos.filter(x => x.id !== id);
+            for (const a of t.avaliacoes) delete a.correcoes[id];
             if (this.#rascunho && this.#rascunho.alunoId === id) this.#rascunho = null;
             this.salvarDados();
+        }
+
+        // Alunos que casam com o texto: número de chamada exato ou parte do nome (sem acentos/maiúsculas)
+        buscarAluno(texto) {
+            const norm = (v) => String(v).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+            const q = norm(texto || '');
+            if (!q) return [];
+            const alunos = this.#turma().alunos;
+            if (/^\d+$/.test(q)) {
+                const exato = alunos.filter(x => x.numero === Number(q));
+                if (exato.length) return clonar(exato);
+            }
+            return clonar(alunos.filter(x => norm(x.nome).includes(q)));
         }
 
         foiCorrigido(alunoId) { return Object.hasOwn(this.#atual().correcoes, alunoId); }
@@ -386,11 +584,12 @@
         // Próximo aluno sem correção depois de `aposId` (circular); null se todos corrigidos
         proximoAlunoPendente(aposId = null) {
             const a = this.#atual();
-            const n = a.alunos.length;
+            const alunos = this.#turma().alunos;
+            const n = alunos.length;
             if (n === 0) return null;
-            let inicio = a.alunos.findIndex(x => x.id === aposId) + 1; // -1 + 1 = 0 se não achar
+            let inicio = alunos.findIndex(x => x.id === aposId) + 1; // -1 + 1 = 0 se não achar
             for (let k = 0; k < n; k++) {
-                const al = a.alunos[(inicio + k) % n];
+                const al = alunos[(inicio + k) % n];
                 if (!Object.hasOwn(a.correcoes, al.id)) return al.id;
             }
             return null;
@@ -403,7 +602,7 @@
             if (!this.gabaritoEstaCompleto) {
                 throw new Error('Preencha todas as questões do Gabarito antes de corrigir um aluno.');
             }
-            if (!a.alunos.some(x => x.id === alunoId)) throw new Error('Aluno não encontrado.');
+            if (!this.#turma().alunos.some(x => x.id === alunoId)) throw new Error('Aluno não encontrado.');
             // Leitura automática manda; sem ela, recorrigir parte da correção salva; senão, tudo em branco
             let base = [];
             if (Array.isArray(respostas)) base = respostas;
@@ -457,14 +656,15 @@
         // ---- estatísticas e exportação -------------------------------
         estatisticas() {
             const a = this.#atual();
-            const corrigidos = a.alunos.filter(x => Object.hasOwn(a.correcoes, x.id));
+            const alunos = this.#turma().alunos;
+            const corrigidos = alunos.filter(x => Object.hasOwn(a.correcoes, x.id));
             const n = corrigidos.length;
             const resultados = corrigidos.map(x => calcularResultado(a.correcoes[x.id], a.gabarito, a.areas, a.totalQuestoes));
             const soma = (f) => resultados.reduce((s, r) => s + f(r), 0);
 
             const areaDe = (q) => (a.areas.find(x => q >= x.inicio && q <= x.fim) || {}).nome || '';
             return {
-                totalAlunos: a.alunos.length,
+                totalAlunos: alunos.length,
                 corrigidos: n,
                 mediaAcertos: n ? soma(r => r.acertos) / n : 0,
                 mediaPercentual: n ? soma(r => r.percentual) / n : 0,
@@ -484,14 +684,15 @@
         csv() {
             const a = this.#atual();
             const comAreas = a.areas.length > 1;
-            const cab = ['Avaliacao', 'Aluno', 'Total de Questoes', 'Acertos', 'Erros', 'Brancos', 'Rasuras', 'Aproveitamento (%)'];
+            const ctx = this.contexto;
+            const cab = ['Materia', 'Turma', 'Avaliacao', 'Numero', 'Aluno', 'Total de Questoes', 'Acertos', 'Erros', 'Brancos', 'Rasuras', 'Aproveitamento (%)'];
             if (comAreas) a.areas.forEach(ar => cab.push(`${ar.nome} - Acertos (de ${ar.fim - ar.inicio + 1})`, `${ar.nome} - %`));
             cab.push('Respostas (. = branco, ! = rasura)');
             const linhas = [];
-            for (const al of a.alunos) {
+            for (const al of this.#turma().alunos) {
                 const r = this.resultadoDoAluno(al.id);
                 if (!r) continue;
-                const linha = [a.titulo, al.nome, a.totalQuestoes, r.acertos, r.erros, r.brancos, r.rasuras, r.percentual];
+                const linha = [ctx.materia.nome, ctx.turma.nome, a.titulo, al.numero, al.nome, a.totalQuestoes, r.acertos, r.erros, r.brancos, r.rasuras, r.percentual];
                 if (comAreas) r.porArea.forEach(p => linha.push(p.acertos, p.percentual));
                 linha.push(a.correcoes[al.id].map(x => x ?? '.').join('-'));
                 linhas.push(linha);
@@ -502,32 +703,34 @@
         exportarBackup() {
             return {
                 app: 'gabarita', versao: VERSAO, exportadoEm: new Date().toISOString(),
-                atualId: this.#estado.atualId, avaliacoes: clonar(this.#estado.avaliacoes)
+                sel: clonar(this.#estado.sel), materias: clonar(this.#estado.materias)
             };
         }
 
         // Substitui TODOS os dados atuais. Guarda uma cópia dos dados anteriores antes de trocar.
+        // Aceita backups da versão atual (materias) e da anterior (avaliacoes).
         importarBackup(entrada) {
             let dados = entrada;
             if (typeof entrada === 'string') {
                 try { dados = JSON.parse(entrada); } catch (e) { throw new Error('O arquivo não é um backup válido (JSON ilegível).'); }
             }
-            if (!dados || dados.app !== 'gabarita' || !Array.isArray(dados.avaliacoes) || dados.avaliacoes.length === 0) {
-                throw new Error('O arquivo não é um backup do Gabarita.');
-            }
-            const novo = normalizarEstado(dados);
-            if (novo.avaliacoes.length === 0) throw new Error('O backup não contém avaliações válidas.');
+            const v5 = dados && Array.isArray(dados.materias) && dados.materias.length > 0;
+            const v4 = dados && Array.isArray(dados.avaliacoes) && dados.avaliacoes.length > 0;
+            if (!dados || dados.app !== 'gabarita' || !(v5 || v4)) throw new Error('O arquivo não é um backup do Gabarita.');
+            const novo = normalizarEstado(v5 ? dados : migrarV4(dados));
+            if (novo.materias.length === 0) throw new Error('O backup não contém dados válidos.');
             try {
                 this.#storage.setItem(KEY_ANTES_IMPORTAR, JSON.stringify(this.exportarBackup()));
             } catch (e) { console.error('Não foi possível guardar cópia antes de importar:', e); }
-            this.#estado = { avaliacoes: novo.avaliacoes, atualId: novo.atualId };
+            this.#estado = { materias: novo.materias, sel: novo.sel };
             this.#rascunho = null;
             this.salvarDados();
-            return { avaliacoes: novo.avaliacoes.length, avisos: [...new Set(novo.avisos)] };
+            const avaliacoes = novo.materias.reduce((n, m) => n + m.turmas.reduce((k, t) => k + t.avaliacoes.length, 0), 0);
+            return { materias: novo.materias.length, avaliacoes, avisos: [...new Set(novo.avisos)] };
         }
 
         limparTudo() {
-            this.#estado = { avaliacoes: [novaAvaliacao(1)], atualId: 1 };
+            this.#padrao();
             this.#rascunho = null;
             try { this.#storage.removeItem(KEY); } catch (e) { console.error('Erro ao limpar:', e); }
         }
@@ -536,7 +739,7 @@
         salvarDados() {
             try {
                 this.#storage.setItem(KEY, JSON.stringify({
-                    versao: VERSAO, atualId: this.#estado.atualId, avaliacoes: this.#estado.avaliacoes
+                    versao: VERSAO, sel: this.#estado.sel, materias: this.#estado.materias
                 }));
                 this.#falhaNotificada = false;
                 return true;
@@ -554,28 +757,38 @@
             try { this.#storage.setItem(KEY_COPIA, bruto); } catch (e) { console.error('Cópia não preservada:', e); }
         }
 
-        #padrao() { this.#estado = { avaliacoes: [novaAvaliacao(1)], atualId: 1 }; }
+        #padrao() {
+            const m = novaMateria({ materias: new Set(), turmas: new Set(), avaliacoes: new Set() }, 'Matéria 1');
+            this.#estado = { materias: [m], sel: { materiaId: m.id, turmaId: m.turmas[0].id, avaliacaoId: m.turmas[0].avaliacoes[0].id } };
+        }
 
         #carregar() {
-            let bruto, brutoV3;
+            let bruto, brutoV4, brutoV3;
             try {
                 bruto = this.#storage.getItem(KEY);
-                if (!bruto) brutoV3 = this.#storage.getItem(KEY_V3);
+                if (!bruto) brutoV4 = this.#storage.getItem(KEY_V4);
+                if (!bruto && !brutoV4) brutoV3 = this.#storage.getItem(KEY_V3);
             } catch (err) {
                 this.#padrao();
                 this.avisoCarga = 'Não foi possível acessar o armazenamento do navegador. Os dados desta sessão não serão salvos.';
                 return;
             }
 
-            if (!bruto && brutoV3) {
+            // Versões anteriores: migra para a atual e MANTÉM a chave antiga intacta (volta possível)
+            const legado = !bruto && (brutoV4 || brutoV3);
+            if (legado) {
                 try {
-                    const novo = migrarV3(JSON.parse(brutoV3));
-                    this.#estado = { avaliacoes: novo.avaliacoes, atualId: novo.atualId };
-                    this.avisoCarga = 'Dados da versão anterior foram importados para a nova versão.';
+                    const novo = brutoV4 ? normalizarEstado(migrarV4(JSON.parse(brutoV4))) : migrarV3(JSON.parse(brutoV3));
+                    if (novo.materias.length === 0) throw new Error('vazio');
+                    if (novo.avisos.length) this.#preservarCopia(brutoV4 || brutoV3);
+                    this.#estado = { materias: novo.materias, sel: novo.sel };
+                    this.avisoCarga = brutoV4
+                        ? 'Seus dados foram migrados: cada avaliação anterior virou uma turma, dentro da matéria "Geral".'
+                        : 'Dados da versão anterior foram importados para a nova versão.';
                     this.salvarDados();
                     return;
                 } catch (err) {
-                    this.#preservarCopia(brutoV3);
+                    this.#preservarCopia(brutoV4 || brutoV3);
                     this.#padrao();
                     this.avisoCarga = 'Os dados da versão anterior estavam ilegíveis. Uma cópia foi preservada no navegador.';
                     return;
@@ -585,15 +798,15 @@
 
             let dados = null;
             try { dados = JSON.parse(bruto); } catch (err) { dados = null; }
-            if (!dados || typeof dados !== 'object' || !Array.isArray(dados.avaliacoes)) {
+            if (!dados || typeof dados !== 'object' || !Array.isArray(dados.materias)) {
                 this.#preservarCopia(bruto);
                 this.#padrao();
                 this.avisoCarga = 'Os dados salvos estavam ilegíveis e foram ignorados. Uma cópia foi preservada no navegador.';
                 return;
             }
             const novo = normalizarEstado(dados);
-            if (novo.avaliacoes.length === 0) { this.#preservarCopia(bruto); this.#padrao(); return; }
-            this.#estado = { avaliacoes: novo.avaliacoes, atualId: novo.atualId };
+            if (novo.materias.length === 0) { this.#preservarCopia(bruto); this.#padrao(); return; }
+            this.#estado = { materias: novo.materias, sel: novo.sel };
             if (novo.avisos.length) {
                 this.#preservarCopia(bruto);
                 this.avisoCarga = 'Parte dos dados salvos estava inconsistente e foi corrigida. Uma cópia original foi preservada no navegador.';

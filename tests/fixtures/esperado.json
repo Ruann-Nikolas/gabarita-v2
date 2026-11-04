@@ -1,8 +1,43 @@
 {
   "_nota": "'.' = em branco, '*' = dupla marcação. 'conferencia' diz como cada resultado foi verificado por olho.",
-  "foto1.jpg": { "leitura": "ABBACDEACDCAEECBBDDAEEDCD*EDBBCADDC*EEAA", "revisar": [2, 26, 36], "conferencia": "inteira, sobre a imagem corrigida (Q01 caneta preta; Q26 e Q36 duplas)" },
-  "foto2.jpg": { "leitura": "BCEEABBDCDDDCBEACDDAAABCCEDCAABDCADCEEAA", "revisar": [], "conferencia": "as 40 respostas conferidas a olho" },
-  "foto3.jpg": { "leitura": "EBBAEDCEACCAEBBECBEBAEBDCEACBDACBECBCBCE", "revisar": [], "conferencia": "só trechos; coincide com o protótipo independente em Python" },
-  "foto4.jpg": { "leitura": "ECACBECECABBCECABACEEABCDEAECDBEBCDDBCBE", "revisar": [], "conferencia": "só trechos; coincide com o protótipo independente em Python" },
-  "foto5.jpg": { "leitura": "AEACBDEBBCADAEBDBCBCD.ABDEBADEBCBADDEDCB", "revisar": [22, 34], "conferencia": "inteira, sobre a imagem corrigida (Q22 mancha fora da bolha = branco sinalizado; Q34 tinta deslocada)" }
+  "foto1.jpg": {
+    "leitura": "ABBACDEACDCAEECBBDDAEEDCD*EDBBCADDC*EEAA",
+    "revisar": [
+      26,
+      36
+    ],
+    "conferencia": "inteira, sobre a imagem corrigida (Q01 caneta preta; Q26 e Q36 duplas)"
+  },
+  "foto2.jpg": {
+    "leitura": "BCEEABBDCDDDCBEACDDAAABCCEDCAABDCADCEEAA",
+    "revisar": [],
+    "conferencia": "as 40 respostas conferidas a olho"
+  },
+  "foto3.jpg": {
+    "leitura": "EBBAEDCEACCAEBBECBEBAEBDCEACBDACBECBCBCE",
+    "revisar": [],
+    "conferencia": "só trechos; coincide com o protótipo independente em Python"
+  },
+  "foto4.jpg": {
+    "leitura": "ECACBECECABBCECABACEEABCDEAECDBEBCDDBCBE",
+    "revisar": [],
+    "conferencia": "só trechos; coincide com o protótipo independente em Python"
+  },
+  "foto5.jpg": {
+    "leitura": "AEACBDEBBCADAEBDBCBCD.ABDEBADEBCBADDEDCB",
+    "revisar": [
+      22
+    ],
+    "conferencia": "inteira, sobre a imagem corrigida (Q22 mancha fora da bolha = branco sinalizado; Q34 tinta deslocada)"
+  },
+  "foto6.jpg": {
+    "leitura": "BCDBCEBCEBEACDBBDACAEBADBDCCEEDCBBCBCBDB",
+    "revisar": [],
+    "conferencia": "as 40 respostas conferidas a olho; caneta preta; tabela esquerda com bolhas deslocadas em relação ao contorno"
+  },
+  "foto7.jpg": {
+    "leitura": "BCDBCEBCEBEACDBBDACAEBADBDCCEEDCBBCBCBDB",
+    "revisar": [],
+    "conferencia": "mesmo cartão da foto6, outra foto (baixa resolução, sombra, rótulos colados à tabela)"
+  }
 }
